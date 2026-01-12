@@ -75,7 +75,8 @@ The script is designed for **IT engineers, MSPs, and support teams** and feature
 ## 🚀 Quick Start
 
 ```powershell
-iwr https://short.apollotechnology.co.uk/health_check -OutFile heathcheck.ps1 powershell -ExecutionPolicy Bypass .\heathcheck.ps1
+iwr https://short.apollotechnology.co.uk/health_check -OutFile heathcheck.ps1
+powershell -ExecutionPolicy Bypass .\heathcheck.ps1
 ```
 
 > **Important:** Run PowerShell as **Administrator**.
