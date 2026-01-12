@@ -15,7 +15,7 @@
 #>
 
 # --- CONFIGURATION ---
-$LogoUrl = "https://raw.githubusercontent.com/Apollo-Technology-LTD/computer-health-check/main/Apollo%20Cropped.png"
+$LogoUrl = "https://raw.githubusercontent.com/ApolloTechnologyLTD/computer-health-check/main/Apollo%20Cropped.png"
 $DemoMode = $false           # Set to $true for fast simulation with DUMMY DATA
 $EmailEnabled = $false       # Set to $true to enable email
 
