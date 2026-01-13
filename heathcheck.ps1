@@ -9,9 +9,10 @@
     - Internet Check visualizes properly in Demo Mode.
     - Disk Defragmentation has 60s auto-skip.
     - Demo Mode generates rich "dummy" data including logs.
+    - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
 .NOTES
     Author: Apollo Technology
-    Additional Notes: Requires PowerShell 5.1+, Windows 10/11
+    Additional Notes: Requires PowerShell 5.1+, Windows 10/11 (Server Compatible)
     Author Name: Lewis Wiltshire
 #>
 
@@ -140,7 +141,7 @@ while ($true) {
         Write-Host "`r   > Connection Verified (DEMO).          " -ForegroundColor Green
         break 
     }
-    if (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet -ErrorAction SilentlyContinue) {
+    if (Test-Connection -ComputerName 8.8.8.8 -Count 3 -Quiet -ErrorAction SilentlyContinue) {
         Write-Host "`r   > Connection Verified.                 " -ForegroundColor Green
         break
     }
@@ -200,7 +201,7 @@ if ($DemoMode) {
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 6. DISK CLEANUP ---
+# --- 6. DISK CLEANUP (PATCHED FOR SERVER 2008) ---
 if (Test-UserSkip -StepName "Disk Cleanup") {
     $ReportData.DiskCleanup = "Skipped by Engineer."
 } else {
@@ -209,15 +210,26 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
         Start-Sleep -Seconds 1
         $ReportData.DiskCleanup = "Maintenance Complete: Removed 1.2GB of temporary files."
     } else {
-        $StateFlags = 1337
-        $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
-        $Handlers = @("Temporary Files", "Recycle Bin", "Active Setup Temp Folders", "Downloaded Program Files", "Temporary Setup Files", "Old ChkDsk Files", "Update Cleanup")
-        foreach ($Handler in $Handlers) {
-            $Key = "$RegPath\$Handler"
-            if (Test-Path $Key) { Set-ItemProperty -Path $Key -Name "StateFlags$StateFlags" -Value 2 -Type DWord -ErrorAction SilentlyContinue }
+        # PATCH: Check if cleanmgr.exe exists before running
+        if (Get-Command "cleanmgr.exe" -ErrorAction SilentlyContinue) {
+            $StateFlags = 1337
+            $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
+            $Handlers = @("Temporary Files", "Recycle Bin", "Active Setup Temp Folders", "Downloaded Program Files", "Temporary Setup Files", "Old ChkDsk Files", "Update Cleanup")
+            foreach ($Handler in $Handlers) {
+                $Key = "$RegPath\$Handler"
+                if (Test-Path $Key) { Set-ItemProperty -Path $Key -Name "StateFlags$StateFlags" -Value 2 -Type DWord -ErrorAction SilentlyContinue }
+            }
+            try {
+                Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:$StateFlags" -Wait -WindowStyle Hidden -ErrorAction Stop
+                $ReportData.DiskCleanup = "Maintenance Complete: Temporary files and Recycle Bin cleaned."
+            } catch {
+                $ReportData.DiskCleanup = "Error: Failed to run Disk Cleanup (Process Error)."
+            }
+        } else {
+            # Tool missing (common on Server 2008 without Desktop Experience)
+            Write-Warning "Disk Cleanup (cleanmgr.exe) not found on this system."
+            $ReportData.DiskCleanup = "Skipped: Disk Cleanup utility not installed."
         }
-        Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:$StateFlags" -Wait -WindowStyle Hidden
-        $ReportData.DiskCleanup = "Maintenance Complete: Temporary files and Recycle Bin cleaned."
     }
     Write-Host "   > Done." -ForegroundColor Green
 }
