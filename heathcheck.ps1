@@ -1,12 +1,13 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v16.2
+    Apollo Technology Full Health Check Script v16.4
 .DESCRIPTION
     Full system health check.
-    - NEW: Prevents Windows from Sleeping/Locking while running.
+    - REMOVED: Visual Progress Bars (Reverted to standard text status).
+    - CHANGED: Disk Defrag now accepts [Enter] as default and logs "Skipped: No Input".
+    - RETAINED: Prevents Windows from Sleeping/Locking while running.
     - Report saves to C:\temp\Apollo_Reports.
     - Storage Analysis with Pie Chart & Top Folder usage.
-    - Visual Progress Bars for every step (0-100% in steps of 5).
     - Captures and embeds SFC [SR] logs into the report.
     - Internet Check visualizes properly in Demo Mode.
     - Disk Defragmentation has 60s auto-skip.
@@ -70,7 +71,7 @@ try {
     [ConsoleUtils]::DisableQuickEdit()
 } catch { }
 
-# --- 2.5 PREVENT SLEEP (NEW) ---
+# --- 2.5 PREVENT SLEEP ---
 # Uses Windows API to prevent the system from idling to sleep or turning off display
 $sleepBlocker = @"
 using System;
@@ -86,7 +87,6 @@ try {
     # 0x80000000 | 0x00000001 | 0x00000002 = 0x80000003
     $null = [SleepUtils]::SetThreadExecutionState(0x80000003)
 } catch { }
-
 
 # --- HELPER FUNCTION: TIMER ---
 function Test-UserSkip {
@@ -124,22 +124,6 @@ function Test-UserSkip {
     return $false
 }
 
-# --- HELPER FUNCTION: PROGRESS BAR ---
-function Show-StepProgress {
-    param(
-        [string]$Activity, 
-        [int]$StepDelay = 30 # Milliseconds between increments
-    )
-    
-    # Loop from 0 to 100 in steps of 5
-    for ($i = 0; $i -le 100; $i += 5) {
-        Write-Progress -Activity $Activity -Status "Processing... $i%" -PercentComplete $i
-        Start-Sleep -Milliseconds $StepDelay
-    }
-    # Clean up bar
-    Write-Progress -Activity $Activity -Completed
-}
-
 # --- 3. INTRO & SETUP ---
 Clear-Host
 $ApolloASCII = @"
@@ -171,8 +155,6 @@ $EngineerName = Read-Host "Please enter the Engineer Name"
 
 # --- INTERNET CHECK (STARTUP) ---
 Write-Host "`n   [CHECK] Verifying Internet Connection..." -ForegroundColor Yellow
-Show-StepProgress -Activity "Internet Connection" -StepDelay 20
-
 while ($true) {
     if ($DemoMode) { 
         Write-Host "`r   > Simulating connection check...       " -NoNewline -ForegroundColor Yellow
@@ -180,7 +162,7 @@ while ($true) {
         Write-Host "`r   > Connection Verified (DEMO).          " -ForegroundColor Green
         break 
     }
-    if (Test-Connection -ComputerName 8.8.8.8 -Count 10 -Quiet -ErrorAction SilentlyContinue) {
+    if (Test-Connection -ComputerName 8.8.8.8 -Count 3 -Quiet -ErrorAction SilentlyContinue) {
         Write-Host "`r   > Connection Verified.                 " -ForegroundColor Green
         break
     }
@@ -210,8 +192,6 @@ Start-Sleep -Seconds 2
 if (Test-UserSkip -StepName "Restore Point Creation") {
     $ReportData.RestorePoint = "Skipped by Engineer."
 } else {
-    Show-StepProgress -Activity "Creating System Restore Point" -StepDelay 50
-    
     if ($DemoMode) {
         Start-Sleep -Seconds 1
         $ReportData.RestorePoint = "Success: Restore point created."
@@ -230,8 +210,6 @@ if (Test-UserSkip -StepName "Restore Point Creation") {
 
 # --- 5. BATTERY STATUS (Instant) ---
 Write-Host "`n[INFO] Checking Battery Health (Instant)..." -ForegroundColor Yellow
-Show-StepProgress -Activity "Checking Battery Health" -StepDelay 10
-
 if ($DemoMode) {
      $ReportData.Battery = "Battery Detected. Status: OK - Charge: 94% (Healthy)"
 } else {
@@ -249,8 +227,6 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
     $ReportData.DiskCleanup = "Skipped by Engineer."
 } else {
     Write-Host "   > Cleaning System Files..." -ForegroundColor Yellow
-    Show-StepProgress -Activity "Disk Cleanup (Cleanmgr)" -StepDelay 40
-    
     if ($DemoMode) {
         Start-Sleep -Seconds 1
         $ReportData.DiskCleanup = "Maintenance Complete: Removed 1.2GB of temporary files."
@@ -281,7 +257,6 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
 
 # --- 6.5 STORAGE ANALYSIS (NEW) ---
 Write-Host "`n[INFO] Analyzing Storage Usage..." -ForegroundColor Yellow
-Show-StepProgress -Activity "Storage Analysis" -StepDelay 20
 
 $StorageUsedGB = 0
 $StorageFreeGB = 0
@@ -405,8 +380,6 @@ Write-Host "   > Done." -ForegroundColor Green
 
 # --- 7. INSTALLED APPLICATIONS (Instant) ---
 Write-Host "`n[INFO] Listing Installed Applications (Instant)..." -ForegroundColor Yellow
-Show-StepProgress -Activity "Software Inventory" -StepDelay 10
-
 if ($DemoMode) {
     # Dummy list for report
     $AppListHTML = "<li>Microsoft Office 365</li><li>Google Chrome</li><li>Adobe Acrobat Reader</li><li>Zoom Workplace</li><li>7-Zip 23.01</li><li>VLC Media Player</li><li>Microsoft Teams</li>"
@@ -429,8 +402,6 @@ Write-Host "   > Done." -ForegroundColor Green
 if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
     $ReportData.SystemHealth = "Skipped by Engineer."
 } else {
-    Show-StepProgress -Activity "Initializing System Scans" -StepDelay 30
-
     if ($DemoMode) {
         Write-Host "      [55%] DISM CheckHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
         Write-Host "      [75%] SFC /Scannow..." -NoNewline; Start-Sleep -Seconds 2; Write-Host " OK" -ForegroundColor Green
@@ -496,8 +467,7 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
     $ReportData.WingetStatus = "Skipped by Engineer."
 } else {
     Write-Host "   > Detecting available updates..." -ForegroundColor Yellow
-    Show-StepProgress -Activity "Checking Winget Repositories" -StepDelay 30
-
+    
     if ($DemoMode) {
         Start-Sleep -Seconds 2
         # Dummy Winget Data
@@ -548,8 +518,6 @@ if (Test-UserSkip -StepName "Windows Update Check") {
     $ReportData.Updates = "Skipped by Engineer."
 } else {
     Write-Host "   > Checking for updates..." -ForegroundColor Yellow
-    Show-StepProgress -Activity "Windows Update Check" -StepDelay 30
-
     if ($DemoMode) {
         # Dummy Windows Update Data
         $ReportData.Updates = "Action Required: 2 updates pending.<br><ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em; color:#d9534f;'><li>2024-02 Cumulative Update for Windows 11 (KB5034765)</li><li>Windows Defender Antivirus Security Intelligence (KB2267602)</li></ul>"
@@ -581,7 +549,7 @@ if (Test-UserSkip -StepName "Windows Update Check") {
 
 # --- 11. DISK OPTIMIZATION (WITH 60s TIMER) ---
 Write-Host "`n   [NEXT STEP] Disk Defragmentation" -ForegroundColor Cyan
-Write-Host "   [Y] Yes  |  [N] No (Default)" -ForegroundColor Gray
+Write-Host "   [Y] Yes  |  [N] No (Default)  |  [Enter] Default" -ForegroundColor Gray
 
 # Flush buffer
 while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) }
@@ -595,24 +563,27 @@ while ((Get-Date) -lt $EndTime) {
     Write-Host "`r   > Waiting for input (Default: No) in $Remaining seconds...   " -NoNewline -ForegroundColor Yellow
     
     if ([Console]::KeyAvailable) {
-        $Key = [Console]::ReadKey($true).Key.ToString().ToUpper()
+        $KeyInfo = [Console]::ReadKey($true)
+        $Key = $KeyInfo.Key.ToString().ToUpper()
+        
         if ($Key -eq "Y") { $OptimizeChoice = "Y"; break }
         if ($Key -eq "N") { $OptimizeChoice = "N"; break }
+        if ($Key -eq "ENTER") { $OptimizeChoice = "ENTER"; break } # Explicit Enter detection
     }
     Start-Sleep -Milliseconds 100
 }
 
 # Default to 'N' if timeout occurred
 if ([string]::IsNullOrWhiteSpace($OptimizeChoice)) { 
-    $OptimizeChoice = 'N' 
+    $OptimizeChoice = 'TIMEOUT' 
     Write-Host "`r   > Timeout reached. Selecting Default: No.                  " -ForegroundColor Yellow
 } else {
-    Write-Host "`r   > Option Selected: $OptimizeChoice                         " -ForegroundColor Yellow
+    # Clear line if user pressed key
+    Write-Host "`r                                                              " -NoNewline
 }
 
 if ($OptimizeChoice -eq 'Y') {
-    Show-StepProgress -Activity "Optimizing Drive" -StepDelay 40
-
+    Write-Host "`r   > Option Selected: YES                                     " -ForegroundColor Green
     if ($DemoMode) {
         Start-Sleep -Seconds 1
         $ReportData.Defrag = "Optimization Complete."
@@ -623,14 +594,19 @@ if ($OptimizeChoice -eq 'Y') {
         $ReportData.Defrag = "Optimization Complete: Drive C: optimized."
     }
     Write-Host "   > Done." -ForegroundColor Green
+
+} elseif ($OptimizeChoice -eq 'ENTER') {
+    Write-Host "`r   > Option Selected: DEFAULT (No Input)                      " -ForegroundColor Yellow
+    $ReportData.Defrag = "Skipped: No Input"
+
 } else {
-    Write-Host "   > SKIPPED: Disk Optimization." -ForegroundColor Yellow
+    # Handles 'N' or 'TIMEOUT'
+    Write-Host "`r   > SKIPPED: Disk Optimization.                              " -ForegroundColor Yellow
     $ReportData.Defrag = "Skipped by Engineer."
 }
 
 # --- 12. GENERATE REPORT ---
 Write-Host "`n[REPORT] Generating Report..." -ForegroundColor Yellow
-Show-StepProgress -Activity "Generating Report" -StepDelay 20
 
 # CHECK INTERNET FOR REPORT
 if ($DemoMode) {
