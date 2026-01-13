@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v16.1 (With Progress Bars)
+    Apollo Technology Full Health Check Script v16.2
 .DESCRIPTION
     Full system health check.
-    - CHANGE: Report saves to C:\temp\Apollo_Reports.
-    - NEW: Storage Analysis with Pie Chart & Top Folder usage.
-    - NEW: Visual Progress Bars for every step (0-100% in steps of 5).
+    - NEW: Prevents Windows from Sleeping/Locking while running.
+    - Report saves to C:\temp\Apollo_Reports.
+    - Storage Analysis with Pie Chart & Top Folder usage.
+    - Visual Progress Bars for every step (0-100% in steps of 5).
     - Captures and embeds SFC [SR] logs into the report.
     - Internet Check visualizes properly in Demo Mode.
     - Disk Defragmentation has 60s auto-skip.
@@ -68,6 +69,24 @@ try {
     Add-Type -TypeDefinition $consoleFuncs -Language CSharp
     [ConsoleUtils]::DisableQuickEdit()
 } catch { }
+
+# --- 2.5 PREVENT SLEEP (NEW) ---
+# Uses Windows API to prevent the system from idling to sleep or turning off display
+$sleepBlocker = @"
+using System;
+using System.Runtime.InteropServices;
+public class SleepUtils {
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+}
+"@
+try {
+    Add-Type -TypeDefinition $sleepBlocker -Language CSharp
+    # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    # 0x80000000 | 0x00000001 | 0x00000002 = 0x80000003
+    $null = [SleepUtils]::SetThreadExecutionState(0x80000003)
+} catch { }
+
 
 # --- HELPER FUNCTION: TIMER ---
 function Test-UserSkip {
@@ -135,6 +154,7 @@ $ApolloASCII = @"
 Write-Host $ApolloASCII -ForegroundColor Cyan
 if ($DemoMode) { Write-Host "      *** DEMO MODE ACTIVE - GENERATING DUMMY DATA ***" -ForegroundColor Magenta }
 if (-not $isAdmin -and $DemoMode) { Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow }
+Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- CHANGED PATH HERE ---
 $BaseDir = "C:\temp\Apollo_Reports"
@@ -740,6 +760,10 @@ if ($EmailEnabled -and $PdfFile -and (Test-Path $PdfFile)) {
         Write-Error "   > Failed to send email. Error: $_"
     }
 }
+
+# --- ALLOW SLEEP AGAIN ---
+# Revert execution state (Good practice, though exit also clears it)
+try { [SleepUtils]::SetThreadExecutionState(0x80000000) | Out-Null } catch { }
 
 Write-Host "`n------------------------------------------------------------"
 Write-Host "          PROCESS COMPLETED" -ForegroundColor Green
