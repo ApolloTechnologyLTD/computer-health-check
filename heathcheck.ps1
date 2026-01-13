@@ -1,24 +1,19 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.0
+    Apollo Technology Full Health Check Script v17.1
 .DESCRIPTION
     Full system health check.
+    - UPDATED: Disk Optimization now auto-skips on SSD/NVMe drives with specific report message.
     - NEW: NVMe/SSD/HDD Detection with SMART Status.
     - NEW: Detailed Device Information Section.
     - NEW: Customer/Ticket Input Validation Loop.
-    - REMOVED: Visual Progress Bars (Reverted to standard text status).
-    - CHANGED: Disk Defrag now accepts [Enter] as default and logs "Skipped: No Input".
     - RETAINED: Prevents Windows from Sleeping/Locking while running.
     - Report saves to C:\temp\Apollo_Reports.
     - Storage Analysis with Pie Chart & Top Folder usage.
     - Captures and embeds SFC [SR] logs into the report.
-    - Internet Check visualizes properly in Demo Mode.
-    - Disk Defragmentation has 60s auto-skip.
-    - Demo Mode generates rich "dummy" data including logs.
     - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
-    Additional Notes: Requires PowerShell 5.1+, Windows 10/11 (Server Compatible)
 #>
 
 # --- CONFIGURATION ---
@@ -74,7 +69,6 @@ try {
 } catch { }
 
 # --- 2.5 PREVENT SLEEP ---
-# Uses Windows API to prevent the system from idling to sleep or turning off display
 $sleepBlocker = @"
 using System;
 using System.Runtime.InteropServices;
@@ -151,7 +145,7 @@ try {
     Write-Warning "Could not create temp path. Using Desktop path: $BaseDir"
 }
 
-# --- NEW INPUT & VALIDATION LOOP ---
+# --- INPUT & VALIDATION LOOP ---
 do {
     Write-Host "`n--- REPORT DETAILS SETUP ---" -ForegroundColor Cyan
     $EngineerName = Read-Host "Enter Engineer Name"
@@ -216,7 +210,7 @@ if ($EmailEnabled) {
 Write-Host "`nInitializing checks for Engineer: $EngineerName..." -ForegroundColor Cyan
 Start-Sleep -Seconds 2
 
-# --- 4. GATHER DEVICE INFORMATION (NEW SECTION) ---
+# --- 4. GATHER DEVICE INFORMATION ---
 Write-Host "`n[INFO] Gathering Hardware Information..." -ForegroundColor Yellow
 $ComputerInfo = Get-CimInstance Win32_ComputerSystem
 $OSInfo = Get-CimInstance Win32_OperatingSystem
@@ -284,7 +278,7 @@ if ($DemoMode) {
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 7. DISK CLEANUP (PATCHED FOR SERVER 2008) ---
+# --- 7. DISK CLEANUP ---
 if (Test-UserSkip -StepName "Disk Cleanup") {
     $ReportData.DiskCleanup = "Skipped by Engineer."
 } else {
@@ -309,7 +303,6 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
                 $ReportData.DiskCleanup = "Error: Failed to run Disk Cleanup (Process Error)."
             }
         } else {
-            # Tool missing (common on Server 2008 without Desktop Experience)
             Write-Warning "Disk Cleanup (cleanmgr.exe) not found on this system."
             $ReportData.DiskCleanup = "Skipped: Disk Cleanup utility not installed."
         }
@@ -317,7 +310,7 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 8. STORAGE ANALYSIS (NEW) ---
+# --- 8. STORAGE ANALYSIS ---
 Write-Host "`n[INFO] Analyzing Storage Usage..." -ForegroundColor Yellow
 
 $StorageUsedGB = 0
@@ -363,15 +356,12 @@ if ($DemoMode) {
             try {
                 $Size = 0
                 if ($Item.PSIsContainer) {
-                    # Measure directory size (recurse)
-                    # Limit depth or errors to avoid hanging forever on protected folders
                     $Size = (Get-ChildItem $Item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
                 } else {
-                    # It is a file (e.g., pagefile.sys)
                     $Size = $Item.Length
                 }
                 
-                if ($Size -gt 100MB) { # Only care about things > 100MB
+                if ($Size -gt 100MB) {
                     $Stats = [PSCustomObject]@{
                         Name = $Item.FullName
                         SizeGB = [math]::Round($Size / 1GB, 2)
@@ -440,10 +430,9 @@ $StorageReportHTML = @"
 
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 9. INSTALLED APPLICATIONS (Instant) ---
+# --- 9. INSTALLED APPLICATIONS ---
 Write-Host "`n[INFO] Listing Installed Applications (Instant)..." -ForegroundColor Yellow
 if ($DemoMode) {
-    # Dummy list for report
     $AppListHTML = "<li>Microsoft Office 365</li><li>Google Chrome</li><li>Adobe Acrobat Reader</li><li>Zoom Workplace</li><li>7-Zip 23.01</li><li>VLC Media Player</li><li>Microsoft Teams</li>"
 } else {
     $UninstallKeys = @(
@@ -460,23 +449,15 @@ if ($DemoMode) {
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 10. DISM & SFC SCANS (WITH LOG EXTRACTION) ---
+# --- 10. DISM & SFC SCANS ---
 if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
     $ReportData.SystemHealth = "Skipped by Engineer."
 } else {
     if ($DemoMode) {
         Write-Host "      [55%] DISM CheckHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
         Write-Host "      [75%] SFC /Scannow..." -NoNewline; Start-Sleep -Seconds 2; Write-Host " OK" -ForegroundColor Green
-        
         $ReportData.SystemHealth = "Issues Found & Repaired (See logs below)."
-        # Generate Dummy Logs
-        $SfcLogContent = @"
-2024-03-15 10:14:22, Info                  CSI    0000021a [SR] Repairing 2 components
-2024-03-15 10:14:22, Info                  CSI    0000021b [SR] Beginning Verify and Repair transaction
-2024-03-15 10:14:23, Info                  CSI    0000021c [SR] Repairing corrupted file \SystemRoot\Win32\webio.dll from store
-2024-03-15 10:14:23, Info                  CSI    0000021d [SR] Repairing corrupted file \SystemRoot\Win32\tcpip.sys from store
-2024-03-15 10:14:24, Info                  CSI    0000021e [SR] Repair complete
-"@
+        $SfcLogContent = "2024-03-15 [SR] Repairing corrupted file \SystemRoot\Win32\webio.dll"
     } else {
         # DISM
         Write-Host "   > Running DISM RestoreHealth..." -ForegroundColor Yellow
@@ -488,14 +469,11 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
         
         # Analyze Results
         $HealthStatus = "Unknown"
-        
-        # CHECK SFC OUTPUT FOR DETAILS
         if ($SfcOut -match "found no integrity violations") {
             $HealthStatus = "Healthy (No integrity violations found)."
         }
         elseif ($SfcOut -match "found corrupt files and successfully repaired") {
             $HealthStatus = "<span style='color:green'><strong>FIXED:</strong> Corrupt files found and successfully repaired.</span>"
-            # Extract Logs
             try {
                 $CBSLog = "$env:windir\Logs\CBS\CBS.log"
                 if (Test-Path $CBSLog) {
@@ -511,7 +489,6 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
                     $SfcLogContent = Get-Content $CBSLog | Select-String "\[SR\]" | Select-Object -Last 20 | Out-String
                 }
             } catch { $SfcLogContent = "Error reading CBS.log: $_" }
-            
         } else {
             $HealthStatus = "Scan Completed (Check logs below for details)."
         }
@@ -530,33 +507,26 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
     $ReportData.WingetStatus = "Skipped by Engineer."
 } else {
     Write-Host "   > Detecting available updates..." -ForegroundColor Yellow
-    
     if ($DemoMode) {
         Start-Sleep -Seconds 2
-        # Dummy Winget Data
-        $ReportData.WingetStatus = "Success: The following packages were updated:<br><ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'><li>Google Chrome (v118 -> v119)</li><li>Zoom Workplace (v5.16 -> v5.17)</li><li>VLC Media Player (v3.0.18 -> v3.0.20)</li></ul>"
+        $ReportData.WingetStatus = "Success: Packages updated."
     } else {
         try {
             if (Get-Command "winget" -ErrorAction SilentlyContinue) {
-                # Get List
                 $UpgradeListRaw = winget upgrade | Out-String
                 $PackagesToUpdate = @()
                 
                 if ($UpgradeListRaw -match "No installed package found matching input criteria") {
                     $ReportData.WingetStatus = "Status OK: No software updates found."
                 } else {
-                    # Parse List
                     $Lines = $UpgradeListRaw -split "`n" | Where-Object { $_ -notmatch "Name|---" -and $_.Trim() -ne "" }
                     foreach ($Line in $Lines) {
                         $PackagesToUpdate += "<li>$($Line.Trim().Substring(0, [math]::Min($Line.Length, 40)).Trim())...</li>"
                     }
-                    
                     if ($PackagesToUpdate.Count -gt 0) {
                         $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$($PackagesToUpdate -join '')</ul>"
-                        
                         Write-Host "   > Installing updates..." -ForegroundColor Yellow
                         $WingetProcess = Start-Process -FilePath "winget" -ArgumentList "upgrade --all --accept-source-agreements --accept-package-agreements" -Wait -PassThru -NoNewWindow
-                        
                         if ($WingetProcess.ExitCode -eq 0) {
                              $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML"
                         } else {
@@ -582,8 +552,7 @@ if (Test-UserSkip -StepName "Windows Update Check") {
 } else {
     Write-Host "   > Checking for updates..." -ForegroundColor Yellow
     if ($DemoMode) {
-        # Dummy Windows Update Data
-        $ReportData.Updates = "Action Required: 2 updates pending.<br><ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em; color:#d9534f;'><li>2024-02 Cumulative Update for Windows 11 (KB5034765)</li><li>Windows Defender Antivirus Security Intelligence (KB2267602)</li></ul>"
+        $ReportData.Updates = "Action Required: 2 updates pending."
     } else {
         try {
             $UpdateSession = New-Object -ComObject Microsoft.Update.Session
@@ -610,62 +579,80 @@ if (Test-UserSkip -StepName "Windows Update Check") {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 13. DISK OPTIMIZATION (WITH 60s TIMER) ---
+# --- 13. DISK OPTIMIZATION (UPDATED LOGIC) ---
 Write-Host "`n   [NEXT STEP] Disk Defragmentation" -ForegroundColor Cyan
-Write-Host "   [Y] Yes  |  [N] No (Default)  |  [Enter] Default" -ForegroundColor Gray
 
-# Flush buffer
-while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) }
+# Check if C: drive is SSD/NVMe or HDD
+if ($DemoMode) { $IsSSD = $false }
+else {
+    try {
+        # Determine media type of System Drive (C:)
+        $SystemDisk = Get-Partition -DriveLetter C -ErrorAction SilentlyContinue | Get-Disk | Get-PhysicalDisk
+        # NVMe drives report as SSD MediaType in Powershell (BusType is NVMe)
+        $IsSSD = ($SystemDisk.MediaType -eq 'SSD')
+    } catch { $IsSSD = $false }
+}
 
-$OptimizeChoice = $null
-$Timeout = 60
-$EndTime = (Get-Date).AddSeconds($Timeout)
+if ($IsSSD) {
+    Write-Host "   > Drive Type Detected: SSD/NVMe (Solid State Drive)" -ForegroundColor Green
+    Write-Host "   > SKIPPING DEFRAGMENTATION (Not required for this drive type)." -ForegroundColor Green
+    $ReportData.Defrag = "Disk Deframentation is not needed on this drive type"
+} else {
+    # It is a HDD (or unknown), so run the existing prompt/timer logic
+    Write-Host "   > Drive Type Detected: HDD (Hard Disk Drive)" -ForegroundColor Yellow
+    Write-Host "   [Y] Yes  |  [N] No (Default)  |  [Enter] Default" -ForegroundColor Gray
 
-while ((Get-Date) -lt $EndTime) {
-    $Remaining = [math]::Ceiling(($EndTime - (Get-Date)).TotalSeconds)
-    Write-Host "`r   > Waiting for input (Default: No) in $Remaining seconds...   " -NoNewline -ForegroundColor Yellow
-    
-    if ([Console]::KeyAvailable) {
-        $KeyInfo = [Console]::ReadKey($true)
-        $Key = $KeyInfo.Key.ToString().ToUpper()
+    # Flush buffer
+    while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) }
+
+    $OptimizeChoice = $null
+    $Timeout = 60
+    $EndTime = (Get-Date).AddSeconds($Timeout)
+
+    while ((Get-Date) -lt $EndTime) {
+        $Remaining = [math]::Ceiling(($EndTime - (Get-Date)).TotalSeconds)
+        Write-Host "`r   > Waiting for input (Default: No) in $Remaining seconds...   " -NoNewline -ForegroundColor Yellow
         
-        if ($Key -eq "Y") { $OptimizeChoice = "Y"; break }
-        if ($Key -eq "N") { $OptimizeChoice = "N"; break }
-        if ($Key -eq "ENTER") { $OptimizeChoice = "ENTER"; break } # Explicit Enter detection
+        if ([Console]::KeyAvailable) {
+            $KeyInfo = [Console]::ReadKey($true)
+            $Key = $KeyInfo.Key.ToString().ToUpper()
+            
+            if ($Key -eq "Y") { $OptimizeChoice = "Y"; break }
+            if ($Key -eq "N") { $OptimizeChoice = "N"; break }
+            if ($Key -eq "ENTER") { $OptimizeChoice = "ENTER"; break }
+        }
+        Start-Sleep -Milliseconds 100
     }
-    Start-Sleep -Milliseconds 100
-}
 
-# Default to 'N' if timeout occurred
-if ([string]::IsNullOrWhiteSpace($OptimizeChoice)) { 
-    $OptimizeChoice = 'TIMEOUT' 
-    Write-Host "`r   > Timeout reached. Selecting Default: No.                  " -ForegroundColor Yellow
-} else {
-    # Clear line if user pressed key
-    Write-Host "`r                                                              " -NoNewline
-}
-
-if ($OptimizeChoice -eq 'Y') {
-    Write-Host "`r   > Option Selected: YES                                     " -ForegroundColor Green
-    if ($DemoMode) {
-        Start-Sleep -Seconds 1
-        $ReportData.Defrag = "Optimization Complete."
+    # Default to 'N' if timeout occurred
+    if ([string]::IsNullOrWhiteSpace($OptimizeChoice)) { 
+        $OptimizeChoice = 'TIMEOUT' 
+        Write-Host "`r   > Timeout reached. Selecting Default: No.                  " -ForegroundColor Yellow
     } else {
-        Write-Host "   > Optimizing Drive C:..." -ForegroundColor Yellow
-        Optimize-Volume -DriveLetter C -Analyze -Verbose | Out-Null
-        Optimize-Volume -DriveLetter C -Defrag -Verbose | Out-Null
-        $ReportData.Defrag = "Optimization Complete: Drive C: optimized."
+        Write-Host "`r                                                              " -NoNewline
     }
-    Write-Host "   > Done." -ForegroundColor Green
 
-} elseif ($OptimizeChoice -eq 'ENTER') {
-    Write-Host "`r   > Option Selected: DEFAULT (No Input)                      " -ForegroundColor Yellow
-    $ReportData.Defrag = "Skipped: No Input"
+    if ($OptimizeChoice -eq 'Y') {
+        Write-Host "`r   > Option Selected: YES                                     " -ForegroundColor Green
+        if ($DemoMode) {
+            Start-Sleep -Seconds 1
+            $ReportData.Defrag = "Optimization Complete."
+        } else {
+            Write-Host "   > Optimizing Drive C:..." -ForegroundColor Yellow
+            Optimize-Volume -DriveLetter C -Analyze -Verbose | Out-Null
+            Optimize-Volume -DriveLetter C -Defrag -Verbose | Out-Null
+            $ReportData.Defrag = "Optimization Complete: Drive C: optimized."
+        }
+        Write-Host "   > Done." -ForegroundColor Green
 
-} else {
-    # Handles 'N' or 'TIMEOUT'
-    Write-Host "`r   > SKIPPED: Disk Optimization.                              " -ForegroundColor Yellow
-    $ReportData.Defrag = "Skipped by Engineer."
+    } elseif ($OptimizeChoice -eq 'ENTER') {
+        Write-Host "`r   > Option Selected: DEFAULT (No Input)                      " -ForegroundColor Yellow
+        $ReportData.Defrag = "Skipped: No Input"
+
+    } else {
+        Write-Host "`r   > SKIPPED: Disk Optimization.                              " -ForegroundColor Yellow
+        $ReportData.Defrag = "Skipped by Engineer."
+    }
 }
 
 # --- 14. GENERATE REPORT ---
@@ -781,7 +768,6 @@ if ($EdgeExe) {
     Write-Host "   > Converting to PDF..." -ForegroundColor Cyan
     $EdgeUserData = "$BaseDir\EdgeTemp"
     if (-not (Test-Path $EdgeUserData)) { New-Item -Path $EdgeUserData -ItemType Directory -Force | Out-Null }
-    
     try {
         $Process = Start-Process -FilePath $EdgeExe -ArgumentList "--headless", "--disable-gpu", "--print-to-pdf=`"$PdfFile`"", "--no-pdf-header-footer", "--user-data-dir=`"$EdgeUserData`"", "`"$HtmlFile`"" -PassThru -Wait
         Start-Sleep -Seconds 2 
