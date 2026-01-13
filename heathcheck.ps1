@@ -1,8 +1,11 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v16.4
+    Apollo Technology Full Health Check Script v17.0
 .DESCRIPTION
     Full system health check.
+    - NEW: NVMe/SSD/HDD Detection with SMART Status.
+    - NEW: Detailed Device Information Section.
+    - NEW: Customer/Ticket Input Validation Loop.
     - REMOVED: Visual Progress Bars (Reverted to standard text status).
     - CHANGED: Disk Defrag now accepts [Enter] as default and logs "Skipped: No Input".
     - RETAINED: Prevents Windows from Sleeping/Locking while running.
@@ -14,9 +17,8 @@
     - Demo Mode generates rich "dummy" data including logs.
     - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
 .NOTES
-    Author: Apollo Technology
+    Author: Apollo Technology (Lewis Wiltshire)
     Additional Notes: Requires PowerShell 5.1+, Windows 10/11 (Server Compatible)
-    Author Name: Lewis Wiltshire
 #>
 
 # --- CONFIGURATION ---
@@ -83,9 +85,7 @@ public class SleepUtils {
 "@
 try {
     Add-Type -TypeDefinition $sleepBlocker -Language CSharp
-    # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
-    # 0x80000000 | 0x00000001 | 0x00000002 = 0x80000003
-    $null = [SleepUtils]::SetThreadExecutionState(0x80000003)
+    $null = [SleepUtils]::SetThreadExecutionState(0x80000003) # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
 } catch { }
 
 # --- HELPER FUNCTION: TIMER ---
@@ -151,7 +151,34 @@ try {
     Write-Warning "Could not create temp path. Using Desktop path: $BaseDir"
 }
 
-$EngineerName = Read-Host "Please enter the Engineer Name"
+# --- NEW INPUT & VALIDATION LOOP ---
+do {
+    Write-Host "`n--- REPORT DETAILS SETUP ---" -ForegroundColor Cyan
+    $EngineerName = Read-Host "Enter Engineer Name"
+    $CustomerName = Read-Host "Enter Customer Full Name"
+    $TicketNumber = Read-Host "Enter Ticket Number"
+
+    # Check if # is present, if not add it
+    if ($TicketNumber -notmatch "^#") {
+        $TicketNumber = "#$TicketNumber"
+    }
+
+    Write-Host "`nPlease confirm the details below:" -ForegroundColor Yellow
+    Write-Host "Engineer: $EngineerName"
+    Write-Host "Customer: $CustomerName"
+    Write-Host "Ticket:   $TicketNumber"
+    
+    $Confirmation = Read-Host "`nAre these details correct? (Press [Enter] or [Y] for Yes, [N] for No)"
+    if ($Confirmation -eq "") { $Confirmation = "Y" }
+
+    if ($Confirmation -match "N") {
+        Clear-Host
+        Write-Host $ApolloASCII -ForegroundColor Cyan
+        Write-Host "Restarting input..." -ForegroundColor Red
+    }
+
+} while ($Confirmation -match "N")
+
 
 # --- INTERNET CHECK (STARTUP) ---
 Write-Host "`n   [CHECK] Verifying Internet Connection..." -ForegroundColor Yellow
@@ -171,6 +198,7 @@ while ($true) {
 }
 
 $CurrentDate = Get-Date -Format "yyyy-MM-dd HH:mm"
+$CurrentYear = (Get-Date).Year
 $FileDate = Get-Date -Format "yyyy-MM-dd_HH-mm"
 $ReportFilename = "Apollo_Health_Report_$FileDate"
 $ReportData = @{}
@@ -188,7 +216,41 @@ if ($EmailEnabled) {
 Write-Host "`nInitializing checks for Engineer: $EngineerName..." -ForegroundColor Cyan
 Start-Sleep -Seconds 2
 
-# --- 4. SYSTEM RESTORE POINT ---
+# --- 4. GATHER DEVICE INFORMATION (NEW SECTION) ---
+Write-Host "`n[INFO] Gathering Hardware Information..." -ForegroundColor Yellow
+$ComputerInfo = Get-CimInstance Win32_ComputerSystem
+$OSInfo = Get-CimInstance Win32_OperatingSystem
+$CPUInfo = Get-CimInstance Win32_Processor
+$FormattedInstallDate = "Unknown"
+if ($OSInfo.InstallDate) {
+    try { $FormattedInstallDate = $OSInfo.InstallDate.ToString("yyyy-MM-dd HH:mm") } catch {}
+}
+
+# DRIVE DETECTION (NVMe/SSD/HDD + SMART)
+$PhysicalDisks = Get-PhysicalDisk | Sort-Object DeviceId
+$DriveListHTML = ""
+
+foreach ($disk in $PhysicalDisks) {
+    # Type Logic
+    $Type = ""
+    if ($disk.MediaType -eq "HDD") { $Type = "Hard Disk Drive (HDD)" }
+    elseif ($disk.MediaType -eq "SSD") {
+        if ($disk.BusType -eq "NVMe") { $Type = "NVMe Solid State Drive" } 
+        else { $Type = "SATA Solid State Drive (SSD)" }
+    }
+    else { $Type = "Unknown ($($disk.MediaType))" }
+    
+    # Size Logic
+    $SizeGB = [math]::Round($disk.Size / 1GB, 2)
+    $SizeStr = if ($SizeGB -gt 1000) { "$([math]::Round($SizeGB / 1024, 2)) TB" } else { "$SizeGB GB" }
+
+    # Health Logic
+    $HealthColor = if ($disk.HealthStatus -eq "Healthy") { "green" } else { "red" }
+    
+    $DriveListHTML += "<li><strong>Disk $($disk.DeviceId):</strong> $Type <br> Size: $SizeStr | Health: <span style='color:$HealthColor'>$($disk.HealthStatus)</span></li>"
+}
+
+# --- 5. SYSTEM RESTORE POINT ---
 if (Test-UserSkip -StepName "Restore Point Creation") {
     $ReportData.RestorePoint = "Skipped by Engineer."
 } else {
@@ -208,7 +270,7 @@ if (Test-UserSkip -StepName "Restore Point Creation") {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 5. BATTERY STATUS (Instant) ---
+# --- 6. BATTERY STATUS (Instant) ---
 Write-Host "`n[INFO] Checking Battery Health (Instant)..." -ForegroundColor Yellow
 if ($DemoMode) {
      $ReportData.Battery = "Battery Detected. Status: OK - Charge: 94% (Healthy)"
@@ -222,7 +284,7 @@ if ($DemoMode) {
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 6. DISK CLEANUP (PATCHED FOR SERVER 2008) ---
+# --- 7. DISK CLEANUP (PATCHED FOR SERVER 2008) ---
 if (Test-UserSkip -StepName "Disk Cleanup") {
     $ReportData.DiskCleanup = "Skipped by Engineer."
 } else {
@@ -255,7 +317,7 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 6.5 STORAGE ANALYSIS (NEW) ---
+# --- 8. STORAGE ANALYSIS (NEW) ---
 Write-Host "`n[INFO] Analyzing Storage Usage..." -ForegroundColor Yellow
 
 $StorageUsedGB = 0
@@ -378,7 +440,7 @@ $StorageReportHTML = @"
 
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 7. INSTALLED APPLICATIONS (Instant) ---
+# --- 9. INSTALLED APPLICATIONS (Instant) ---
 Write-Host "`n[INFO] Listing Installed Applications (Instant)..." -ForegroundColor Yellow
 if ($DemoMode) {
     # Dummy list for report
@@ -398,7 +460,7 @@ if ($DemoMode) {
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 8. DISM & SFC SCANS (WITH LOG EXTRACTION) ---
+# --- 10. DISM & SFC SCANS (WITH LOG EXTRACTION) ---
 if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
     $ReportData.SystemHealth = "Skipped by Engineer."
 } else {
@@ -427,9 +489,12 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
         # Analyze Results
         $HealthStatus = "Unknown"
         
-        # Check SFC Output
-        if ($SfcOut -match "found corrupt files and successfully repaired") {
-            $HealthStatus = "Issues Found & Repaired (Corrupt files fixed)."
+        # CHECK SFC OUTPUT FOR DETAILS
+        if ($SfcOut -match "found no integrity violations") {
+            $HealthStatus = "Healthy (No integrity violations found)."
+        }
+        elseif ($SfcOut -match "found corrupt files and successfully repaired") {
+            $HealthStatus = "<span style='color:green'><strong>FIXED:</strong> Corrupt files found and successfully repaired.</span>"
             # Extract Logs
             try {
                 $CBSLog = "$env:windir\Logs\CBS\CBS.log"
@@ -439,7 +504,7 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
             } catch { $SfcLogContent = "Error reading CBS.log: $_" }
             
         } elseif ($SfcOut -match "found corrupt files but was unable to fix") {
-            $HealthStatus = "WARNING: Corrupt files found but repair FAILED."
+            $HealthStatus = "<span style='color:red'><strong>CRITICAL:</strong> Corrupt files found but Windows could NOT fix them. Manual intervention required.</span>"
             try {
                 $CBSLog = "$env:windir\Logs\CBS\CBS.log"
                 if (Test-Path $CBSLog) {
@@ -447,10 +512,8 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
                 }
             } catch { $SfcLogContent = "Error reading CBS.log: $_" }
             
-        } elseif ($SfcOut -match "did not find any integrity violations") {
-            $HealthStatus = "Healthy: No integrity violations found."
         } else {
-            $HealthStatus = "Scan Completed (See logs for details)."
+            $HealthStatus = "Scan Completed (Check logs below for details)."
         }
         
         if ($DismOut -match "The restore operation completed successfully") {
@@ -462,7 +525,7 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 9. WINGET SOFTWARE UPDATES ---
+# --- 11. WINGET SOFTWARE UPDATES ---
 if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
     $ReportData.WingetStatus = "Skipped by Engineer."
 } else {
@@ -513,7 +576,7 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 10. WINDOWS UPDATES (PENDING LIST) ---
+# --- 12. WINDOWS UPDATES (PENDING LIST) ---
 if (Test-UserSkip -StepName "Windows Update Check") {
     $ReportData.Updates = "Skipped by Engineer."
 } else {
@@ -547,7 +610,7 @@ if (Test-UserSkip -StepName "Windows Update Check") {
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 11. DISK OPTIMIZATION (WITH 60s TIMER) ---
+# --- 13. DISK OPTIMIZATION (WITH 60s TIMER) ---
 Write-Host "`n   [NEXT STEP] Disk Defragmentation" -ForegroundColor Cyan
 Write-Host "   [Y] Yes  |  [N] No (Default)  |  [Enter] Default" -ForegroundColor Gray
 
@@ -605,7 +668,7 @@ if ($OptimizeChoice -eq 'Y') {
     $ReportData.Defrag = "Skipped by Engineer."
 }
 
-# --- 12. GENERATE REPORT ---
+# --- 14. GENERATE REPORT ---
 Write-Host "`n[REPORT] Generating Report..." -ForegroundColor Yellow
 
 # CHECK INTERNET FOR REPORT
@@ -656,12 +719,27 @@ $HtmlContent = @"
 <div class="header">
     <img src="$LogoUrl" alt="Apollo Technology" onerror="this.style.display='none'">
     <h1>Health Check Report $ModeLabel</h1>
+    <p>This report has been generated by <strong>$EngineerName</strong> for ticket (<strong>$TicketNumber</strong>) for <strong>$CustomerName</strong></p>
     <div class="meta">
-        <strong>Engineer:</strong> $EngineerName &nbsp;|&nbsp; 
-        <strong>Date:</strong> $CurrentDate &nbsp;|&nbsp; 
-        <strong>Device:</strong> $env:COMPUTERNAME
+        <strong>Report Date:</strong> $CurrentDate
     </div>
 </div>
+
+<h2>Device Information</h2>
+<div class="section">
+    <div class="item"><span class="label">Device Name/Hostname:</span> $($ComputerInfo.Name)</div>
+    <div class="item"><span class="label">OS Version:</span> $($OSInfo.Caption)</div>
+    <div class="item"><span class="label">OS:</span> $($OSInfo.OSArchitecture) ($($OSInfo.Version))</div>
+    <div class="item"><span class="label">RAM Size:</span> $([math]::Round($ComputerInfo.TotalPhysicalMemory / 1GB, 0)) GB</div>
+    <div class="item"><span class="label">CPU Type/Model:</span> $($CPUInfo.Name)</div>
+    <div class="item"><span class="label">Number of Processors:</span> $($CPUInfo.NumberOfLogicalProcessors) Threads / $($CPUInfo.NumberOfCores) Cores</div>
+    <div class="item"><span class="label">Date on Windows Install:</span> $FormattedInstallDate</div>
+    <div class="item">
+        <span class="label">Disk Drives:</span>
+        <ul>$DriveListHTML</ul>
+    </div>
+</div>
+
 <h2>System Status</h2>
 <div class="section">
     <div class="item"><span class="label">Internet Connection:</span> $($ReportData.Internet)</div>
@@ -685,16 +763,16 @@ $StorageReportHTML
 
 $LogSectionHTML
 
-<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">This report has been generated by $EngineerName at Apollo Technology using the Health Check Tool</p>
+<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">&copy; $CurrentYear by Apollo Technology. All rights reserved | This tool has been created by Lewis Wiltshire</p>
 </body>
 </html>
 "@
 
-# 1. Save HTML
+# 15. Save HTML
 $HtmlContent | Out-File -FilePath $HtmlFile -Encoding UTF8
 Start-Sleep -Seconds 1
 
-# 2. Convert to PDF using Edge
+# 16. Convert to PDF using Edge
 $EdgeLoc1 = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 $EdgeLoc2 = "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
 $EdgeExe = if (Test-Path $EdgeLoc1) { $EdgeLoc1 } elseif (Test-Path $EdgeLoc2) { $EdgeLoc2 } else { $null }
@@ -726,7 +804,7 @@ if ($EdgeExe) {
     $PdfFile = $null
 }
 
-# --- 13. EMAIL REPORT ---
+# --- 17. EMAIL REPORT ---
 if ($EmailEnabled -and $PdfFile -and (Test-Path $PdfFile)) {
     Write-Host "`nSending Email to $ToAddress..." -ForegroundColor Yellow
     try {
@@ -738,7 +816,6 @@ if ($EmailEnabled -and $PdfFile -and (Test-Path $PdfFile)) {
 }
 
 # --- ALLOW SLEEP AGAIN ---
-# Revert execution state (Good practice, though exit also clears it)
 try { [SleepUtils]::SetThreadExecutionState(0x80000000) | Out-Null } catch { }
 
 Write-Host "`n------------------------------------------------------------"
