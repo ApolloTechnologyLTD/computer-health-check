@@ -596,7 +596,7 @@ else {
 if ($IsSSD) {
     Write-Host "   > Drive Type Detected: SSD/NVMe (Solid State Drive)" -ForegroundColor Green
     Write-Host "   > SKIPPING DEFRAGMENTATION (Not required for this drive type)." -ForegroundColor Green
-    $ReportData.Defrag = "Disk Deframentation is not needed on this drive type"
+    $ReportData.Defrag = "Scan not required for this drive type"
 } else {
     # It is a HDD (or unknown), so run the existing prompt/timer logic
     Write-Host "   > Drive Type Detected: HDD (Hard Disk Drive)" -ForegroundColor Yellow
@@ -750,7 +750,7 @@ $StorageReportHTML
 
 $LogSectionHTML
 
-<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">&copy; $CurrentYear by Apollo Technology. All rights reserved | This tool has been created by Lewis Wiltshire</p>
+<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">&copy; $CurrentYear by Apollo Technology. All rights reserved | This tool has been created by Lewis Wiltshire (Apollo Technology Senior Engineer)</p>
 </body>
 </html>
 "@
