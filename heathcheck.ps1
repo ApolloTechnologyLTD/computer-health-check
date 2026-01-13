@@ -180,7 +180,7 @@ while ($true) {
         Write-Host "`r   > Connection Verified (DEMO).          " -ForegroundColor Green
         break 
     }
-    if (Test-Connection -ComputerName 8.8.8.8 -Count 3 -Quiet -ErrorAction SilentlyContinue) {
+    if (Test-Connection -ComputerName 8.8.8.8 -Count 10 -Quiet -ErrorAction SilentlyContinue) {
         Write-Host "`r   > Connection Verified.                 " -ForegroundColor Green
         break
     }
