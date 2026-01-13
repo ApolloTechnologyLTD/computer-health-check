@@ -127,7 +127,7 @@ The script proceeds through structured maintenance stages. For longer-running ta
 Once completed, the script generates:
 
 - **Apollo_Health_Report_YYYY-MM-DD.pdf**
-- **Location:** Public Desktop and C:\temp\Apollo_Reports
+- **Location:** Public Desktop and `C:\temp\Apollo_Reports`
 
 ### Additional Report Details
 - HTML version is created if PDF conversion fails
