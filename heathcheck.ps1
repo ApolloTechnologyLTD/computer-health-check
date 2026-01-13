@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v15.0
+    Apollo Technology Full Health Check Script v16.1
 .DESCRIPTION
     Full system health check.
-    - FIX: Corrected syntax error in Try/Catch blocks.
+    - CHANGE: Report saves to C:\temp\Apollo_Reports.
+    - NEW: Storage Analysis with Pie Chart & Top Folder usage.
     - Captures and embeds SFC [SR] logs into the report.
     - Internet Check visualizes properly in Demo Mode.
     - Disk Defragmentation has 60s auto-skip.
@@ -117,14 +118,15 @@ Write-Host $ApolloASCII -ForegroundColor Cyan
 if ($DemoMode) { Write-Host "      *** DEMO MODE ACTIVE - GENERATING DUMMY DATA ***" -ForegroundColor Magenta }
 if (-not $isAdmin -and $DemoMode) { Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow }
 
-# Save Paths
-$BaseDir = "C:\Apollo_Reports"
+# --- CHANGED PATH HERE ---
+$BaseDir = "C:\temp\Apollo_Reports"
+
 try {
     if (-not (Test-Path $BaseDir)) { New-Item -Path $BaseDir -ItemType Directory -Force -ErrorAction Stop | Out-Null }
 } catch {
     $BaseDir = "$env:USERPROFILE\Desktop\Apollo_Reports"
     if (-not (Test-Path $BaseDir)) { New-Item -Path $BaseDir -ItemType Directory -Force | Out-Null }
-    Write-Warning "Using Desktop path: $BaseDir"
+    Write-Warning "Could not create temp path. Using Desktop path: $BaseDir"
 }
 
 $EngineerName = Read-Host "Please enter the Engineer Name"
@@ -150,6 +152,7 @@ $CurrentDate = Get-Date -Format "yyyy-MM-dd HH:mm"
 $FileDate = Get-Date -Format "yyyy-MM-dd_HH-mm"
 $ReportFilename = "Apollo_Health_Report_$FileDate"
 $ReportData = @{}
+$StorageReportHTML = "" # Initialize Storage HTML
 $SfcLogContent = "" # Initialize Log Content
 
 # Email Creds
@@ -218,6 +221,129 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
     }
     Write-Host "   > Done." -ForegroundColor Green
 }
+
+# --- 6.5 STORAGE ANALYSIS (NEW) ---
+Write-Host "`n[INFO] Analyzing Storage Usage..." -ForegroundColor Yellow
+
+$StorageUsedGB = 0
+$StorageFreeGB = 0
+$StorageTotalGB = 0
+$StoragePercent = 0
+$StorageTableRows = ""
+
+if ($DemoMode) {
+    Start-Sleep -Seconds 2
+    # DUMMY DATA
+    $StorageUsedGB = 340.5
+    $StorageFreeGB = 135.5
+    $StorageTotalGB = 476.0
+    $StoragePercent = 71
+    $StorageTableRows = @"
+    <tr><td>C:\Users\Apollo</td><td>120.4 GB</td></tr>
+    <tr><td>C:\Windows</td><td>45.2 GB</td></tr>
+    <tr><td>C:\Program Files</td><td>32.1 GB</td></tr>
+    <tr><td>C:\Program Files (x86)</td><td>18.5 GB</td></tr>
+    <tr><td>C:\hiberfil.sys</td><td>12.0 GB</td></tr>
+"@
+} else {
+    try {
+        # 1. Get Drive Info
+        $Drive = Get-PSDrive C -ErrorAction SilentlyContinue
+        if ($Drive) {
+            $StorageUsedGB  = [math]::Round($Drive.Used / 1GB, 2)
+            $StorageFreeGB  = [math]::Round($Drive.Free / 1GB, 2)
+            $StorageTotalGB = [math]::Round(($Drive.Used + $Drive.Free) / 1GB, 2)
+            
+            if ($StorageTotalGB -gt 0) {
+                $StoragePercent = [math]::Round(($StorageUsedGB / $StorageTotalGB) * 100)
+            }
+        }
+
+        # 2. Get Top Heavy Folders/Files (Root Level)
+        Write-Host "   > Scanning largest folders in C:\ (This may take a moment)..." -ForegroundColor Yellow
+        $RootItems = Get-ChildItem "C:\" -Force -ErrorAction SilentlyContinue
+        $FolderStats = @()
+        
+        foreach ($Item in $RootItems) {
+            try {
+                $Size = 0
+                if ($Item.PSIsContainer) {
+                    # Measure directory size (recurse)
+                    # Limit depth or errors to avoid hanging forever on protected folders
+                    $Size = (Get-ChildItem $Item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                } else {
+                    # It is a file (e.g., pagefile.sys)
+                    $Size = $Item.Length
+                }
+                
+                if ($Size -gt 100MB) { # Only care about things > 100MB
+                    $Stats = [PSCustomObject]@{
+                        Name = $Item.FullName
+                        SizeGB = [math]::Round($Size / 1GB, 2)
+                    }
+                    $FolderStats += $Stats
+                }
+            } catch { }
+        }
+        
+        # Sort and build HTML Rows
+        $TopFolders = $FolderStats | Sort-Object SizeGB -Descending | Select-Object -First 5
+        foreach ($f in $TopFolders) {
+            $StorageTableRows += "<tr><td>$($f.Name)</td><td>$($f.SizeGB) GB</td></tr>"
+        }
+        
+    } catch {
+        $StorageTableRows = "<tr><td colspan='2'>Error calculating storage details.</td></tr>"
+    }
+}
+
+# 3. Build HTML Section (With CSS Pie Chart)
+$StorageReportHTML = @"
+<h2>Storage Analysis</h2>
+<div class="section">
+    <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap;">
+        <div style="
+            width: 160px; 
+            height: 160px; 
+            border-radius: 50%; 
+            background: conic-gradient(#d9534f 0% $($StoragePercent)%, #5cb85c $($StoragePercent)% 100%);
+            border: 4px solid #fff;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            position: relative;
+        ">
+            <div style="
+                position: absolute; top: 50%; left: 50%; 
+                transform: translate(-50%, -50%); 
+                font-weight: bold; font-size: 1.2em; color: #fff; text-shadow: 0px 0px 3px #000;">
+                $($StoragePercent)% Used
+            </div>
+        </div>
+        
+        <div style="padding: 10px;">
+            <ul style="list-style: none; padding: 0;">
+                <li style="margin-bottom:5px;"><span style="display:inline-block; width:15px; height:15px; background:#d9534f; margin-right:5px;"></span><strong>Used Space:</strong> $StorageUsedGB GB</li>
+                <li style="margin-bottom:5px;"><span style="display:inline-block; width:15px; height:15px; background:#5cb85c; margin-right:5px;"></span><strong>Free Space:</strong> $StorageFreeGB GB</li>
+                <li style="border-top:1px solid #ccc; padding-top:5px; margin-top:5px;"><strong>Total Capacity:</strong> $StorageTotalGB GB</li>
+            </ul>
+        </div>
+    </div>
+
+    <h3 style="margin-top: 20px; font-size: 1em; color: #444; border-bottom: 1px solid #ddd; padding-bottom: 5px;">Largest Items (Root Directory)</h3>
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+        <thead>
+            <tr style="background: #eee; text-align: left;">
+                <th style="padding: 8px; border-bottom: 1px solid #ddd;">Directory / File</th>
+                <th style="padding: 8px; border-bottom: 1px solid #ddd;">Size</th>
+            </tr>
+        </thead>
+        <tbody>
+            $StorageTableRows
+        </tbody>
+    </table>
+</div>
+"@
+
+Write-Host "   > Done." -ForegroundColor Green
 
 # --- 7. INSTALLED APPLICATIONS (Instant) ---
 Write-Host "`n[INFO] Listing Installed Applications (Instant)..." -ForegroundColor Yellow
@@ -498,6 +624,8 @@ $HtmlContent = @"
     <div class="item"><span class="label">Battery Status:</span> $($ReportData.Battery)</div>
     <div class="item"><span class="label">Restore Point:</span> $($ReportData.RestorePoint)</div>
 </div>
+
+$StorageReportHTML
 
 <h2>Maintenance & Updates</h2>
 <div class="section">
