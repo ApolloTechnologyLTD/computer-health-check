@@ -750,7 +750,7 @@ $StorageReportHTML
 
 $LogSectionHTML
 
-<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">&copy; $CurrentYear by Apollo Technology. All rights reserved | This tool has been created by Lewis Wiltshire (Apollo Technology Senior Engineer)</p>
+<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">&copy; $CurrentYear by Apollo Technology. All rights reserved | This tool has been created by Lewis Wiltshire (Apollo Technology)</p>
 </body>
 </html>
 "@
