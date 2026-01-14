@@ -132,6 +132,7 @@ $ApolloASCII = @"
 Write-Host $ApolloASCII -ForegroundColor Cyan
 if ($DemoMode) { Write-Host "      *** DEMO MODE ACTIVE - GENERATING DUMMY DATA ***" -ForegroundColor Magenta }
 if (-not $isAdmin -and $DemoMode) { Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow }
+Write-Host "        Created by Lewis Wiltshire, Version 17.1" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- CHANGED PATH HERE ---
