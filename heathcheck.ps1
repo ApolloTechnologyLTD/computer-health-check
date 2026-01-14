@@ -137,7 +137,7 @@ if ($DemoMode) { Write-Host "      *** DEMO MODE ACTIVE - GENERATING DUMMY DATA 
 
 # --- ADDED: ELEVATED PERMISSIONS NOTICE ---
 if ($isAdmin) { 
-    Write-Host "      [NOTICE] Running in Elevated Permissions" -ForegroundColor Red 
+    Write-Host "         [NOTICE] Running in Elevated Permissions" -ForegroundColor Red 
 } elseif ($DemoMode) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
