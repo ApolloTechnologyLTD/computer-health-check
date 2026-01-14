@@ -1,9 +1,11 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.1
+    Apollo Technology Full Health Check Script v17.2
 .DESCRIPTION
     Full system health check.
     - UPDATED: Disk Optimization now auto-skips on SSD/NVMe drives with specific report message.
+    - NEW: GPU Detection added to Device Details.
+    - NEW: Temperature Readouts (CPU/Disk) added to Device Details.
     - NEW: NVMe/SSD/HDD Detection with SMART Status.
     - NEW: Detailed Device Information Section.
     - NEW: Customer/Ticket Input Validation Loop.
@@ -132,7 +134,7 @@ $ApolloASCII = @"
 Write-Host $ApolloASCII -ForegroundColor Cyan
 if ($DemoMode) { Write-Host "      *** DEMO MODE ACTIVE - GENERATING DUMMY DATA ***" -ForegroundColor Magenta }
 if (-not $isAdmin -and $DemoMode) { Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow }
-Write-Host "        Created by Lewis Wiltshire, Version 17.1" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.2" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- CHANGED PATH HERE ---
@@ -219,6 +221,52 @@ $CPUInfo = Get-CimInstance Win32_Processor
 $FormattedInstallDate = "Unknown"
 if ($OSInfo.InstallDate) {
     try { $FormattedInstallDate = $OSInfo.InstallDate.ToString("yyyy-MM-dd HH:mm") } catch {}
+}
+
+# --- NEW: GPU DETECTION ---
+try {
+    $GPUInfo = Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name -Unique
+    $GPUString = $GPUInfo -join ", "
+} catch {
+    $GPUString = "Unknown / Standard VGA Adapter"
+}
+
+# --- NEW: TEMPERATURE SENSORS (BEST EFFORT) ---
+Write-Host "   > Probing Temperature Sensors (If available)..." -ForegroundColor Yellow
+# CPU Temp
+if ($DemoMode) {
+    $CPUTempStr = "45 °C (Simulated)"
+    $DriveTempStr = "38 °C (Simulated)"
+    $RAMTempStr = "N/A (No Sensor)"
+} else {
+    try {
+        # Attempt to get thermal zone info from WMI (Result is in Kelvin)
+        $CPUTempObj = Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace "root/wmi" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($CPUTempObj -and $CPUTempObj.CurrentTemperature -gt 0) {
+            $CPUTempC = [math]::Round(($CPUTempObj.CurrentTemperature - 2732) / 10, 1)
+            $CPUTempStr = "$CPUTempC °C"
+        } else {
+            $CPUTempStr = "N/A (Sensor Hidden/Driver Restricted)"
+        }
+    } catch {
+        $CPUTempStr = "N/A"
+    }
+
+    # Disk Temp (Attempts to read via Storage Reliability Counter - usually works on NVMe)
+    try {
+        $DriveTemps = Get-PhysicalDisk | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue | Where-Object { $_.Temperature -gt 0 }
+        if ($DriveTemps) {
+            $DriveTempList = foreach ($d in $DriveTemps) { "$($d.Temperature) °C" }
+            $DriveTempStr = $DriveTempList -join ", "
+        } else {
+            $DriveTempStr = "N/A (SMART data not exposed via WMI)"
+        }
+    } catch {
+        $DriveTempStr = "N/A"
+    }
+    
+    # RAM Temp (Rarely available via standard WMI)
+    $RAMTempStr = "N/A (Sensor requires specialized driver)"
 }
 
 # DRIVE DETECTION (NVMe/SSD/HDD + SMART)
@@ -720,11 +768,16 @@ $HtmlContent = @"
     <div class="item"><span class="label">OS:</span> $($OSInfo.OSArchitecture) ($($OSInfo.Version))</div>
     <div class="item"><span class="label">RAM Size:</span> $([math]::Round($ComputerInfo.TotalPhysicalMemory / 1GB, 0)) GB</div>
     <div class="item"><span class="label">CPU Type/Model:</span> $($CPUInfo.Name)</div>
+    <div class="item"><span class="label">GPU (Graphics):</span> $GPUString</div>
     <div class="item"><span class="label">Number of Processors:</span> $($CPUInfo.NumberOfLogicalProcessors) Threads / $($CPUInfo.NumberOfCores) Cores</div>
     <div class="item"><span class="label">Date on Windows Install:</span> $FormattedInstallDate</div>
     <div class="item">
         <span class="label">Disk Drives:</span>
         <ul>$DriveListHTML</ul>
+    </div>
+    <div class="item">
+        <span class="label">Temperature Readings (Snapshot):</span>
+        CPU: $CPUTempStr | Disk: $DriveTempStr | RAM: $RAMTempStr
     </div>
 </div>
 
