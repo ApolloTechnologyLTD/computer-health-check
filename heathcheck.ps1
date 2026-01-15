@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.3
+    Apollo Technology Full Health Check Script v17.4
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -10,6 +10,9 @@
     - NEW: NVMe/SSD/HDD Detection with SMART Status.
     - NEW: Detailed Device Information Section.
     - NEW: Customer/Ticket Input Validation Loop.
+    - NEW: Added Network Adapter Information to Device Info.
+    - UPDATED: Split DISM and SFC into separate logic blocks.
+    - UPDATED: DISM now runs CheckHealth -> ScanHealth -> RestoreHealth sequentially.
     - RETAINED: Prevents Windows from Sleeping/Locking while running.
     - Report saves to C:\temp\Apollo_Reports.
     - Storage Analysis with Pie Chart & Top Folder usage.
@@ -142,7 +145,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.3" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.4" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- CHANGED PATH HERE ---
@@ -231,12 +234,28 @@ if ($OSInfo.InstallDate) {
     try { $FormattedInstallDate = $OSInfo.InstallDate.ToString("yyyy-MM-dd HH:mm") } catch {}
 }
 
-# --- NEW: GPU DETECTION (RETAINED) ---
+# --- GPU DETECTION (RETAINED) ---
 try {
     $GPUInfo = Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name -Unique
     $GPUString = $GPUInfo -join ", "
 } catch {
     $GPUString = "Unknown / Standard VGA Adapter"
+}
+
+# --- NEW: NETWORK ADAPTER DETECTION ---
+$NetworkAdaptersHTML = ""
+try {
+    $Adapters = Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' }
+    foreach ($nic in $Adapters) {
+        $ipInfo = Get-NetIPAddress -InterfaceAlias $nic.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $ip = if ($ipInfo) { $ipInfo.IPAddress } else { "No IPv4" }
+        $NetworkAdaptersHTML += "<li><strong>$($nic.Name)</strong>: $($nic.InterfaceDescription) (Speed: $($nic.LinkSpeed), IP: $ip)</li>"
+    }
+    if ([string]::IsNullOrWhiteSpace($NetworkAdaptersHTML)) {
+        $NetworkAdaptersHTML = "<li>No active physical network adapters found.</li>"
+    }
+} catch {
+    $NetworkAdaptersHTML = "<li>Unable to retrieve network adapter info.</li>"
 }
 
 # DRIVE DETECTION (NVMe/SSD/HDD + SMART)
@@ -468,31 +487,63 @@ if ($DemoMode) {
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 10. DISM & SFC SCANS ---
-if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
-    $ReportData.SystemHealth = "Skipped by Engineer."
+# --- 10a. DISM SCANS (SEQUENTIAL) ---
+if (Test-UserSkip -StepName "DISM Health Checks" -Seconds 5) {
+    $ReportData.DismStatus = "Skipped by Engineer."
 } else {
     if ($DemoMode) {
-        Write-Host "      [55%] DISM CheckHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
+        Write-Host "      [33%] DISM CheckHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
+        Write-Host "      [66%] DISM ScanHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
+        Write-Host "      [100%] DISM RestoreHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
+        $ReportData.DismStatus = "Success: No corruption found (Demo)."
+    } else {
+        # 1. CheckHealth
+        Write-Host "   > Running DISM /CheckHealth..." -ForegroundColor Yellow
+        $DismCheck = Dism /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
+
+        # 2. ScanHealth
+        Write-Host "   > Running DISM /ScanHealth..." -ForegroundColor Yellow
+        $DismScan = Dism /Online /Cleanup-Image /ScanHealth 2>&1 | Out-String
+
+        # 3. RestoreHealth
+        Write-Host "   > Running DISM /RestoreHealth..." -ForegroundColor Yellow
+        $DismRestore = Dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
+        
+        # Analyze Results
+        $DismSummary = "<strong>CheckHealth:</strong> "
+        if ($DismCheck -match "No component store corruption detected") { $DismSummary += "No corruption detected.<br>" } else { $DismSummary += "Corruption detected (or unknown result).<br>" }
+        
+        $DismSummary += "<strong>ScanHealth:</strong> "
+        if ($DismScan -match "No component store corruption detected") { $DismSummary += "No corruption detected.<br>" } else { $DismSummary += "Issues found.<br>" }
+
+        $DismSummary += "<strong>RestoreHealth:</strong> "
+        if ($DismRestore -match "The restore operation completed successfully") { $DismSummary += "Completed successfully." } else { $DismSummary += "Operation completed (Check logs)." }
+        
+        $ReportData.DismStatus = $DismSummary
+    }
+    Write-Host "   > DISM Checks Completed." -ForegroundColor Green
+}
+
+# --- 10b. SFC SCAN (AFTER DISM) ---
+if (Test-UserSkip -StepName "SFC (System File Checker)" -Seconds 5) {
+    $ReportData.SfcStatus = "Skipped by Engineer."
+} else {
+    if ($DemoMode) {
         Write-Host "      [75%] SFC /Scannow..." -NoNewline; Start-Sleep -Seconds 2; Write-Host " OK" -ForegroundColor Green
-        $ReportData.SystemHealth = "Issues Found & Repaired (See logs below)."
+        $ReportData.SfcStatus = "Issues Found & Repaired (See logs below)."
         $SfcLogContent = "2024-03-15 [SR] Repairing corrupted file \SystemRoot\Win32\webio.dll"
     } else {
-        # DISM
-        Write-Host "   > Running DISM RestoreHealth..." -ForegroundColor Yellow
-        $DismOut = Dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
-        
         # SFC
         Write-Host "   > Running SFC /Scannow..." -ForegroundColor Yellow
         $SfcOut = sfc /scannow 2>&1 | Out-String
         
         # Analyze Results
-        $HealthStatus = "Unknown"
+        $SfcStatus = "Unknown"
         if ($SfcOut -match "found no integrity violations") {
-            $HealthStatus = "Healthy (No integrity violations found)."
+            $SfcStatus = "Healthy (No integrity violations found)."
         }
         elseif ($SfcOut -match "found corrupt files and successfully repaired") {
-            $HealthStatus = "<span style='color:green'><strong>FIXED:</strong> Corrupt files found and successfully repaired.</span>"
+            $SfcStatus = "<span style='color:green'><strong>FIXED:</strong> Corrupt files found and successfully repaired.</span>"
             try {
                 $CBSLog = "$env:windir\Logs\CBS\CBS.log"
                 if (Test-Path $CBSLog) {
@@ -501,7 +552,7 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
             } catch { $SfcLogContent = "Error reading CBS.log: $_" }
             
         } elseif ($SfcOut -match "found corrupt files but was unable to fix") {
-            $HealthStatus = "<span style='color:red'><strong>CRITICAL:</strong> Corrupt files found but Windows could NOT fix them. Manual intervention required.</span>"
+            $SfcStatus = "<span style='color:red'><strong>CRITICAL:</strong> Corrupt files found but Windows could NOT fix them. Manual intervention required.</span>"
             try {
                 $CBSLog = "$env:windir\Logs\CBS\CBS.log"
                 if (Test-Path $CBSLog) {
@@ -509,16 +560,12 @@ if (Test-UserSkip -StepName "DISM & SFC Scans" -Seconds 5) {
                 }
             } catch { $SfcLogContent = "Error reading CBS.log: $_" }
         } else {
-            $HealthStatus = "Scan Completed (Check logs below for details)."
+            $SfcStatus = "Scan Completed (Check logs below for details)."
         }
         
-        if ($DismOut -match "The restore operation completed successfully") {
-            $HealthStatus += "<br>(DISM RestoreHealth completed successfully)"
-        }
-        
-        $ReportData.SystemHealth = $HealthStatus
+        $ReportData.SfcStatus = $SfcStatus
     }
-    Write-Host "   > Done." -ForegroundColor Green
+    Write-Host "   > SFC Scan Completed." -ForegroundColor Green
 }
 
 # --- 11. WINGET SOFTWARE UPDATES ---
@@ -742,6 +789,10 @@ $HtmlContent = @"
     <div class="item"><span class="label">Number of Processors:</span> $($CPUInfo.NumberOfLogicalProcessors) Threads / $($CPUInfo.NumberOfCores) Cores</div>
     <div class="item"><span class="label">Date on Windows Install:</span> $FormattedInstallDate</div>
     <div class="item">
+        <span class="label">Network Adapters:</span>
+        <ul>$NetworkAdaptersHTML</ul>
+    </div>
+    <div class="item">
         <span class="label">Disk Drives:</span>
         <ul>$DriveListHTML</ul>
     </div>
@@ -758,7 +809,8 @@ $StorageReportHTML
 
 <h2>Maintenance & Updates</h2>
 <div class="section">
-    <div class="item"><span class="label">System Integrity (SFC/DISM):</span> $($ReportData.SystemHealth)</div>
+    <div class="item"><span class="label">DISM Health Check:</span> <br>$($ReportData.DismStatus)</div>
+    <div class="item"><span class="label">SFC System Integrity:</span> $($ReportData.SfcStatus)</div>
     <div class="item"><span class="label">Software Upgrades (Winget):</span> $($ReportData.WingetStatus)</div>
     <div class="item"><span class="label">Windows Updates:</span> $($ReportData.Updates)</div>
     <div class="item"><span class="label">Storage Cleanup:</span> $($ReportData.DiskCleanup)</div>
