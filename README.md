@@ -80,14 +80,20 @@ Completely automated Script
 ```powershell
 iwr https://short.apollotechnology.co.uk/health_check -OutFile heathcheck.ps1; powershell -ExecutionPolicy Bypass .\heathcheck.ps1
 ```
-⚠️ Script must be ran in administrator
-
+> [!IMPORTANT]
+> **ADMINISTRATOR PRIVILEGES REQUIRED**
+>
+> This script modifies system files/registries. You must launch your terminal with **"Run as Administrator"** rights.
+> If you run this in a standard user shell, the script will fail or behave unexpectedly.
 Completely manual Script
 ```powershell
 iwr https://short.apollotechnology.co.uk/manual-health-check -OutFile manualhealthcheck.ps1; powershell -ExecutionPolicy Bypass .\manualhealthcheck.ps1
 ```
-⚠️ Script must be ran in administrator
-
+> [!IMPORTANT]
+> **ADMINISTRATOR PRIVILEGES REQUIRED**
+>
+> This script modifies system files/registries. You must launch your terminal with **"Run as Administrator"** rights.
+> If you run this in a standard user shell, the script will fail or behave unexpectedly.
 ---
 
 ## ⚙️ Configuration
