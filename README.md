@@ -10,7 +10,7 @@
 
 ## 📖 About
 
-This PowerShell script (v17.1) performs a full system health check on Windows 10/11 devices. It automates common maintenance tasks, validates system integrity, checks hardware health, updates software, and generates a **professional Apollo Technology–branded report** for engineers or end users.
+This PowerShell script (v17.4) performs a full system health check on Windows 10/11 devices. It automates common maintenance tasks, validates system integrity, checks hardware health, updates software, and generates a **professional Apollo Technology–branded report** for engineers or end users.
 
 The script is designed for **IT engineers, MSPs, and support teams** and features an interactive **Engineer Mode** allowing steps to be skipped, delayed, or executed immediately. A **Demo Mode** is also included for training and testing report output.
 
