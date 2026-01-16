@@ -76,9 +76,17 @@ The script is designed for **IT engineers, MSPs, and support teams** and feature
 
 ## 🚀 Quick Start
 
+Completely automated Script
 ```powershell
 iwr https://short.apollotechnology.co.uk/health_check -OutFile heathcheck.ps1; powershell -ExecutionPolicy Bypass .\heathcheck.ps1
 ```
+⚠️ Script must be ran in administrator
+
+Completely manual Script
+```powershell
+iwr https://short.apollotechnology.co.uk/manual-health-check -OutFile manualhealthcheck.ps1; powershell -ExecutionPolicy Bypass .\manualhealthcheck.ps1
+```
+⚠️ Script must be ran in administrator
 
 ---
 
