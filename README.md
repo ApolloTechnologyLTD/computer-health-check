@@ -83,8 +83,8 @@ iwr https://short.apollotechnology.co.uk/health_check -OutFile heathcheck.ps1; p
 > [!IMPORTANT]
 > **ADMINISTRATOR PRIVILEGES REQUIRED**
 >
-> This script modifies system files/registries. You must launch your terminal with **"Run as Administrator"** rights.
-> If you run this in a standard user shell, the script will fail or behave unexpectedly.
+> This script modifies system files/registries. You must launch your PowerShell with **"Run as Administrator"** rights.
+> If you run this in a standard PowerShell, the script will fail or behave unexpectedly.
 
 Completely manual Script
 ```powershell
