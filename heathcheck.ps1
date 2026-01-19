@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.4
+    Apollo Technology Full Health Check Script v17.5
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -18,6 +18,7 @@
     - Storage Analysis with Pie Chart & Top Folder usage.
     - Captures and embeds SFC [SR] logs into the report.
     - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
+    - UPDATED: Filename format changed to Health_Check_CustomerName_TicketNumber.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
 #>
@@ -145,7 +146,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.4" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.5" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- CHANGED PATH HERE ---
@@ -207,8 +208,15 @@ while ($true) {
 
 $CurrentDate = Get-Date -Format "yyyy-MM-dd HH:mm"
 $CurrentYear = (Get-Date).Year
-$FileDate = Get-Date -Format "yyyy-MM-dd_HH-mm"
-$ReportFilename = "Apollo_Health_Report_$FileDate"
+
+# --- CHANGED: FILE NAMING LOGIC ---
+# Create filename friendly versions (Remove # from ticket, remove illegal chars from name)
+$TicketForFile = $TicketNumber -replace "#",""
+$CustomerForFile = $CustomerName -replace '[\\/:*?"<>|]', '' 
+
+# Format: Health_Check_CustomerName_TicketNumber
+$ReportFilename = "Health_Check_$($CustomerForFile)_$($TicketForFile)"
+
 $ReportData = @{}
 $StorageReportHTML = "" # Initialize Storage HTML
 $SfcLogContent = "" # Initialize Log Content
