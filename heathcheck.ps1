@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.5
+    Apollo Technology Full Health Check Script v17.6 (Fixed Winget)
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -19,6 +19,7 @@
     - Captures and embeds SFC [SR] logs into the report.
     - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
     - UPDATED: Filename format changed to Health_Check_CustomerName_TicketNumber.
+    - FIXED: Winget execution logic for Administrator environments.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
 #>
@@ -146,7 +147,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.5" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.6" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- CHANGED PATH HERE ---
@@ -576,7 +577,7 @@ if (Test-UserSkip -StepName "SFC (System File Checker)" -Seconds 5) {
     Write-Host "   > SFC Scan Completed." -ForegroundColor Green
 }
 
-# --- 11. WINGET SOFTWARE UPDATES ---
+# --- 11. WINGET SOFTWARE UPDATES (FIXED) ---
 if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
     $ReportData.WingetStatus = "Skipped by Engineer."
 } else {
@@ -586,21 +587,47 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
         $ReportData.WingetStatus = "Success: Packages updated."
     } else {
         try {
-            if (Get-Command "winget" -ErrorAction SilentlyContinue) {
-                $UpgradeListRaw = winget upgrade | Out-String
+            # ATTEMPT TO FIND WINGET EXECUTABLE
+            $WingetExe = Get-Command "winget" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+            
+            # If not found in path, check common local appdata location for the current user
+            if (-not $WingetExe) {
+                $LocalWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+                if (Test-Path $LocalWinget) { $WingetExe = $LocalWinget }
+            }
+
+            if ($WingetExe) {
+                # 1. GET LIST OF UPDATES
+                # We use cmd /c to ensure the alias resolves correctly in all contexts
+                $UpgradeListRaw = cmd /c "winget upgrade" 2>&1 | Out-String
+                
                 $PackagesToUpdate = @()
                 
                 if ($UpgradeListRaw -match "No installed package found matching input criteria") {
                     $ReportData.WingetStatus = "Status OK: No software updates found."
                 } else {
-                    $Lines = $UpgradeListRaw -split "`n" | Where-Object { $_ -notmatch "Name|---" -and $_.Trim() -ne "" }
-                    foreach ($Line in $Lines) {
-                        $PackagesToUpdate += "<li>$($Line.Trim().Substring(0, [math]::Min($Line.Length, 40)).Trim())...</li>"
+                    # Parse the output (Cleaner Logic)
+                    $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { 
+                        $_ -notmatch "^Name|^---|^\s*$" -and $_.Length -gt 10
                     }
+                    
+                    foreach ($Line in $Lines) {
+                        # Take the first 40 chars of the line (The Name column usually)
+                        $CleanName = $Line.Trim()
+                        if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + "..." }
+                        $PackagesToUpdate += "<li>$CleanName</li>"
+                    }
+
+                    # 2. RUN UPDATES IF FOUND
                     if ($PackagesToUpdate.Count -gt 0) {
                         $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$($PackagesToUpdate -join '')</ul>"
                         Write-Host "   > Installing updates..." -ForegroundColor Yellow
-                        $WingetProcess = Start-Process -FilePath "winget" -ArgumentList "upgrade --all --accept-source-agreements --accept-package-agreements" -Wait -PassThru -NoNewWindow
+                        
+                        # Added --include-unknown to catch tricky version numbers
+                        $ProcArgs = "upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown"
+                        
+                        $WingetProcess = Start-Process -FilePath $WingetExe -ArgumentList $ProcArgs -Wait -PassThru -NoNewWindow
+                        
                         if ($WingetProcess.ExitCode -eq 0) {
                              $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML"
                         } else {
@@ -611,10 +638,11 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
                     }
                 }
             } else {
-                 $ReportData.WingetStatus = "Failed: Winget command not found."
+                 Write-Warning "Winget executable not found in Path or LocalAppData."
+                 $ReportData.WingetStatus = "Failed: Winget command not found on system."
             }
         } catch {
-            $ReportData.WingetStatus = "Error: Winget execution failed."
+            $ReportData.WingetStatus = "Error: Winget execution failed ($($_.Exception.Message))."
         }
     }
     Write-Host "   > Done." -ForegroundColor Green
