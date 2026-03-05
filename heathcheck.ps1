@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.8 (New UI & Fixed Winget)
+    Apollo Technology Full Health Check Script v17.9 (New UI, Winget Fixes & Artifact Filter)
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -16,6 +16,8 @@
     - UPDATED: Report strictly saves to C:\temp\Apollo_Reports.
     - FIXED: Winget execution logic with prompt bypasses.
     - NEW UI: Report HTML/PDF generation completely refactored to match Hardware Diagnostics style.
+    - PATCHED: DISM string concatenation syntax error.
+    - PATCHED: Winget Mojibake/Progress bar artifacts strictly filtered from HTML output.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
     Updated by: Gemini
@@ -144,7 +146,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.8" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.9" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- STRICT PATH SETUP ---
@@ -406,9 +408,15 @@ if (Test-UserSkip -StepName "DISM Health Checks" -Seconds 5) {
         Write-Host "   > Running DISM /RestoreHealth..." -ForegroundColor Yellow
         $DismRestore = Dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
         
-        $DismSummary = "<strong>CheckHealth:</strong> " + (if ($DismCheck -match "No component store corruption") { "No corruption.<br>" } else { "Corruption detected.<br>" })
-        $DismSummary += "<strong>ScanHealth:</strong> " + (if ($DismScan -match "No component store corruption") { "No corruption.<br>" } else { "Issues found.<br>" })
-        $DismSummary += "<strong>RestoreHealth:</strong> " + (if ($DismRestore -match "completed successfully") { "Completed successfully." } else { "Completed (Check logs)." })
+        $DismSummary = "<strong>CheckHealth:</strong> "
+        if ($DismCheck -match "No component store corruption") { $DismSummary += "No corruption.<br>" } else { $DismSummary += "Corruption detected.<br>" }
+        
+        $DismSummary += "<strong>ScanHealth:</strong> "
+        if ($DismScan -match "No component store corruption") { $DismSummary += "No corruption.<br>" } else { $DismSummary += "Issues found.<br>" }
+
+        $DismSummary += "<strong>RestoreHealth:</strong> "
+        if ($DismRestore -match "completed successfully") { $DismSummary += "Completed successfully." } else { $DismSummary += "Completed (Check logs)." }
+        
         $ReportData.DismStatus = $DismSummary
     }
     Write-Host "   > DISM Checks Completed." -ForegroundColor Green
@@ -459,11 +467,23 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
                 if ($UpgradeListRaw -match "No installed package found matching input criteria") {
                     $ReportData.WingetStatus = "Status OK: No software updates found."
                 } else {
-                    $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { $_ -notmatch "^Name|^---|^\s*$" -and $_.Length -gt 10 }
-                    foreach ($Line in $Lines) {
-                        $CleanName = $Line.Trim(); if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + "..." }
-                        $PackagesToUpdate += "<li>$CleanName</li>"
+                    # NEW FILTER: Ignore empty lines, headers, and Mojibake progress bar artifacts
+                    $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { 
+                        $_ -notmatch "^Name|^---|^\s*$" -and 
+                        $_.Length -gt 5 -and 
+                        $_ -notmatch "Ô|û|ê|Æ|█|▒|▓|░|\\|/" -and 
+                        $_ -match "[a-zA-Z]" 
                     }
+                    
+                    foreach ($Line in $Lines) {
+                        # STRIP all non-ASCII printable characters just in case
+                        $CleanName = $Line -replace '[^\x20-\x7E]', ''
+                        $CleanName = $CleanName.Trim()
+                        
+                        if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + "..." }
+                        if ($CleanName.Length -gt 2) { $PackagesToUpdate += "<li>$CleanName</li>" }
+                    }
+                    
                     if ($PackagesToUpdate.Count -gt 0) {
                         $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$($PackagesToUpdate -join '')</ul>"
                         Write-Host "   > Installing updates..." -ForegroundColor Yellow
