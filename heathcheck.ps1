@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.6 (Fixed Winget)
+    Apollo Technology Full Health Check Script v17.7 (Fixed Winget & Report Path)
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -14,14 +14,15 @@
     - UPDATED: Split DISM and SFC into separate logic blocks.
     - UPDATED: DISM now runs CheckHealth -> ScanHealth -> RestoreHealth sequentially.
     - RETAINED: Prevents Windows from Sleeping/Locking while running.
-    - Report saves to C:\temp\Apollo_Reports.
+    - UPDATED: Report strictly saves to C:\temp\Apollo_Reports (Removed Public Desktop copy).
     - Storage Analysis with Pie Chart & Top Folder usage.
     - Captures and embeds SFC [SR] logs into the report.
     - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
     - UPDATED: Filename format changed to Health_Check_CustomerName_TicketNumber.
-    - FIXED: Winget execution logic for Administrator environments.
+    - FIXED: Winget execution logic with prompt bypasses.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
+    Updated by: Gemini
 #>
 
 # --- CONFIGURATION ---
@@ -147,18 +148,17 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.6" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.7" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
-# --- CHANGED PATH HERE ---
+# --- STRICT PATH SETUP ---
 $BaseDir = "C:\temp\Apollo_Reports"
 
 try {
     if (-not (Test-Path $BaseDir)) { New-Item -Path $BaseDir -ItemType Directory -Force -ErrorAction Stop | Out-Null }
 } catch {
-    $BaseDir = "$env:USERPROFILE\Desktop\Apollo_Reports"
-    if (-not (Test-Path $BaseDir)) { New-Item -Path $BaseDir -ItemType Directory -Force | Out-Null }
-    Write-Warning "Could not create temp path. Using Desktop path: $BaseDir"
+    Write-Error "Could not create path: $BaseDir. Please ensure you have correct permissions."
+    exit
 }
 
 # --- INPUT & VALIDATION LOOP ---
@@ -597,9 +597,8 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
             }
 
             if ($WingetExe) {
-                # 1. GET LIST OF UPDATES
-                # We use cmd /c to ensure the alias resolves correctly in all contexts
-                $UpgradeListRaw = cmd /c "winget upgrade" 2>&1 | Out-String
+                # 1. GET LIST OF UPDATES - NOW INCLUDES BYPASS FLAGS
+                $UpgradeListRaw = cmd /c "winget upgrade --accept-source-agreements --disable-interactivity" 2>&1 | Out-String
                 
                 $PackagesToUpdate = @()
                 
@@ -623,8 +622,8 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
                         $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$($PackagesToUpdate -join '')</ul>"
                         Write-Host "   > Installing updates..." -ForegroundColor Yellow
                         
-                        # Added --include-unknown to catch tricky version numbers
-                        $ProcArgs = "upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown"
+                        # Added --include-unknown and --disable-interactivity to catch tricky version numbers and prompts
+                        $ProcArgs = "upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown --disable-interactivity"
                         
                         $WingetProcess = Start-Process -FilePath $WingetExe -ArgumentList $ProcArgs -Wait -PassThru -NoNewWindow
                         
@@ -780,10 +779,10 @@ if (-not [string]::IsNullOrWhiteSpace($SfcLogContent)) {
 "@
 }
 
-# SAVE PATHS
+# SAVE PATHS - STRICTLY C:\temp\Apollo_Reports
 $HtmlFile = "$BaseDir\$ReportFilename.html"
 $PdfFile  = "$BaseDir\$ReportFilename.pdf"
-$PublicDesktopPdf = "$env:PUBLIC\Desktop\$ReportFilename.pdf"
+$FinalReportPath = "" # We will track which file opens at the end
 $ModeLabel = if ($DemoMode) { "(DEMO MODE)" } else { "" }
 
 $HtmlContent = @"
@@ -880,21 +879,19 @@ if ($EdgeExe) {
         $Process = Start-Process -FilePath $EdgeExe -ArgumentList "--headless", "--disable-gpu", "--print-to-pdf=`"$PdfFile`"", "--no-pdf-header-footer", "--user-data-dir=`"$EdgeUserData`"", "`"$HtmlFile`"" -PassThru -Wait
         Start-Sleep -Seconds 2 
         if (Test-Path $PdfFile) {
-            Write-Host "   > Success! Report Generated." -ForegroundColor Green
-            Copy-Item -Path $PdfFile -Destination $PublicDesktopPdf -Force
+            Write-Host "   > Success! Report Generated at $PdfFile" -ForegroundColor Green
+            $FinalReportPath = $PdfFile
             Remove-Item $HtmlFile -ErrorAction SilentlyContinue
             Remove-Item $EdgeUserData -Recurse -Force -ErrorAction SilentlyContinue
         } else { throw "PDF not found" }
     } catch {
         Write-Warning "PDF Conversion failed. Opening HTML instead."
-        Copy-Item -Path $HtmlFile -Destination "$env:PUBLIC\Desktop\$ReportFilename.html" -Force
-        Start-Process "$env:PUBLIC\Desktop\$ReportFilename.html"
+        $FinalReportPath = $HtmlFile
         $PdfFile = $null
     }
 } else {
     Write-Warning "Edge not found. Saving HTML report."
-    Copy-Item -Path $HtmlFile -Destination "$env:PUBLIC\Desktop\$ReportFilename.html" -Force
-    Start-Process "$env:PUBLIC\Desktop\$ReportFilename.html"
+    $FinalReportPath = $HtmlFile
     $PdfFile = $null
 }
 
@@ -914,6 +911,6 @@ try { [SleepUtils]::SetThreadExecutionState(0x80000000) | Out-Null } catch { }
 
 Write-Host "`n------------------------------------------------------------"
 Write-Host "          PROCESS COMPLETED" -ForegroundColor Green
-if (Test-Path $PublicDesktopPdf) { Start-Process $PublicDesktopPdf; Start-Sleep -Seconds 1 }
+if (Test-Path $FinalReportPath) { Start-Process $FinalReportPath; Start-Sleep -Seconds 1 }
 Write-Host "------------------------------------------------------------"
 exit
