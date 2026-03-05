@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.9 (New UI, Winget Fixes & Artifact Filter)
+    Apollo Technology Full Health Check Script v17.9.1 (Safe Regex Edition)
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -17,7 +17,7 @@
     - FIXED: Winget execution logic with prompt bypasses.
     - NEW UI: Report HTML/PDF generation completely refactored to match Hardware Diagnostics style.
     - PATCHED: DISM string concatenation syntax error.
-    - PATCHED: Winget Mojibake/Progress bar artifacts strictly filtered from HTML output.
+    - PATCHED: Winget Mojibake/Progress bar artifacts strictly filtered using safe ASCII regex.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
     Updated by: Gemini
@@ -146,7 +146,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.9" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.9.1" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- STRICT PATH SETUP ---
@@ -467,16 +467,16 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
                 if ($UpgradeListRaw -match "No installed package found matching input criteria") {
                     $ReportData.WingetStatus = "Status OK: No software updates found."
                 } else {
-                    # NEW FILTER: Ignore empty lines, headers, and Mojibake progress bar artifacts
+                    # NEW FILTER: Pure ASCII regex to avoid file encoding corruption
                     $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { 
                         $_ -notmatch "^Name|^---|^\s*$" -and 
                         $_.Length -gt 5 -and 
-                        $_ -notmatch "Ô|û|ê|Æ|█|▒|▓|░|\\|/" -and 
+                        $_ -notmatch "[^\x20-\x7E]{3,}" -and 
                         $_ -match "[a-zA-Z]" 
                     }
                     
                     foreach ($Line in $Lines) {
-                        # STRIP all non-ASCII printable characters just in case
+                        # STRIP all non-ASCII printable characters
                         $CleanName = $Line -replace '[^\x20-\x7E]', ''
                         $CleanName = $CleanName.Trim()
                         
@@ -490,8 +490,11 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
                         $ProcArgs = "upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown --disable-interactivity"
                         $WingetProcess = Start-Process -FilePath $WingetExe -ArgumentList $ProcArgs -Wait -PassThru -NoNewWindow
                         
-                        if ($WingetProcess.ExitCode -eq 0) { $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML" } 
-                        else { $ReportData.WingetStatus = "Warning: Winget returned code $($WingetProcess.ExitCode).<br>Targeted packages:<br>$PackageHTML" }
+                        if ($WingetProcess.ExitCode -eq 0) { 
+                            $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML" 
+                        } else { 
+                            $ReportData.WingetStatus = "Warning: Winget returned code $($WingetProcess.ExitCode).<br>Targeted packages:<br>$PackageHTML" 
+                        }
                     } else {
                         $ReportData.WingetStatus = "Status OK: No software updates required."
                     }
