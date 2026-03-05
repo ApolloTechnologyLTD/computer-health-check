@@ -20,7 +20,6 @@
     - PATCHED: Winget Mojibake/Progress bar artifacts strictly filtered using safe ASCII regex.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
-    Updated by: Gemini
 #>
 
 # --- CONFIGURATION ---
