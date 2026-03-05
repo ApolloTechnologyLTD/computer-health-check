@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.9.1 (Safe Regex Edition)
+    Apollo Technology Full Health Check Script v17.9.2 (Parser-Safe Edition)
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
@@ -16,8 +16,8 @@
     - UPDATED: Report strictly saves to C:\temp\Apollo_Reports.
     - FIXED: Winget execution logic with prompt bypasses.
     - NEW UI: Report HTML/PDF generation completely refactored to match Hardware Diagnostics style.
-    - PATCHED: DISM string concatenation syntax error.
-    - PATCHED: Winget Mojibake/Progress bar artifacts strictly filtered using safe ASCII regex.
+    - PATCHED: Winget Mojibake/Progress bar artifacts strictly filtered.
+    - PATCHED: Removed fragile subexpressions and backticks to prevent copy-paste AST parser crashes.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
 #>
@@ -145,7 +145,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.9.1" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.9.2" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- STRICT PATH SETUP ---
@@ -439,7 +439,7 @@ if (Test-UserSkip -StepName "SFC (System File Checker)" -Seconds 5) {
         try {
             $CBSLog = "$env:windir\Logs\CBS\CBS.log"
             if (Test-Path $CBSLog -and ($SfcStatus -match "FIXED|CRITICAL")) {
-                $SfcLogContent = Get-Content $CBSLog | Select-String "\[SR\]" | Select-Object -Last 10 | Out-String
+                $SfcLogContent = Get-Content $CBSLog | Select-String '\[SR\]' | Select-Object -Last 10 | Out-String
             }
         } catch { }
         $ReportData.SfcStatus = $SfcStatus
@@ -448,69 +448,76 @@ if (Test-UserSkip -StepName "SFC (System File Checker)" -Seconds 5) {
 }
 
 # --- 11. WINGET SOFTWARE UPDATES ---
-if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
-    $ReportData.WingetStatus = "Skipped by Engineer."
+if (Test-UserSkip -StepName 'Software Updates (Winget)' -Seconds 5) {
+    $ReportData.WingetStatus = 'Skipped by Engineer.'
 } else {
-    Write-Host "   > Detecting available updates..." -ForegroundColor Yellow
+    Write-Host '   > Detecting available updates...' -ForegroundColor Yellow
     if ($DemoMode) {
         Start-Sleep -Seconds 2
-        $ReportData.WingetStatus = "Success: Packages updated."
+        $ReportData.WingetStatus = 'Success: Packages updated.'
     } else {
         try {
-            $WingetExe = Get-Command "winget" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-            if (-not $WingetExe) { $LocalWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"; if (Test-Path $LocalWinget) { $WingetExe = $LocalWinget } }
+            $WingetExe = Get-Command 'winget' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+            if (-not $WingetExe) { 
+                $LocalWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+                if (Test-Path $LocalWinget) { $WingetExe = $LocalWinget } 
+            }
+            
             if ($WingetExe) {
-                $UpgradeListRaw = cmd /c "winget upgrade --accept-source-agreements --disable-interactivity" 2>&1 | Out-String
+                $UpgradeListRaw = cmd /c 'winget upgrade --accept-source-agreements --disable-interactivity' 2>&1 | Out-String
                 $PackagesToUpdate = @()
                 
-                if ($UpgradeListRaw -match "No installed package found matching input criteria") {
-                    $ReportData.WingetStatus = "Status OK: No software updates found."
+                if ($UpgradeListRaw -match 'No installed package found matching input criteria') {
+                    $ReportData.WingetStatus = 'Status OK: No software updates found.'
                 } else {
-                    # NEW FILTER: Pure ASCII regex to avoid file encoding corruption
-                    $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { 
-                        $_ -notmatch "^Name|^---|^\s*$" -and 
+                    # Pure ASCII regex, single quotes to prevent text editor corruption
+                    $Lines = $UpgradeListRaw -split '\r?\n' | Where-Object { 
+                        $_ -notmatch '^Name|^---|^\s*$' -and 
                         $_.Length -gt 5 -and 
-                        $_ -notmatch "[^\x20-\x7E]{3,}" -and 
-                        $_ -match "[a-zA-Z]" 
+                        $_ -notmatch '[^\x20-\x7E]{3,}' -and 
+                        $_ -match '[a-zA-Z]' 
                     }
                     
                     foreach ($Line in $Lines) {
-                        # STRIP all non-ASCII printable characters
                         $CleanName = $Line -replace '[^\x20-\x7E]', ''
                         $CleanName = $CleanName.Trim()
                         
-                        if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + "..." }
+                        if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + '...' }
                         if ($CleanName.Length -gt 2) { $PackagesToUpdate += "<li>$CleanName</li>" }
                     }
                     
                     if ($PackagesToUpdate.Count -gt 0) {
-                        $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$($PackagesToUpdate -join '')</ul>"
-                        Write-Host "   > Installing updates..." -ForegroundColor Yellow
-                        $ProcArgs = "upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown --disable-interactivity"
+                        # Removed subexpressions entirely from HTML generation
+                        $JoinedPkgs = $PackagesToUpdate -join ''
+                        $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$JoinedPkgs</ul>"
+                        
+                        Write-Host '   > Installing updates...' -ForegroundColor Yellow
+                        $ProcArgs = 'upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown --disable-interactivity'
                         $WingetProcess = Start-Process -FilePath $WingetExe -ArgumentList $ProcArgs -Wait -PassThru -NoNewWindow
                         
-                        if ($WingetProcess.ExitCode -eq 0) { 
+                        $ExitCode = $WingetProcess.ExitCode
+                        if ($ExitCode -eq 0) { 
                             $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML" 
                         } else { 
-                            $ReportData.WingetStatus = "Warning: Winget returned code $($WingetProcess.ExitCode).<br>Targeted packages:<br>$PackageHTML" 
+                            $ReportData.WingetStatus = "Warning: Winget returned code ${ExitCode}.<br>Targeted packages:<br>$PackageHTML" 
                         }
                     } else {
-                        $ReportData.WingetStatus = "Status OK: No software updates required."
+                        $ReportData.WingetStatus = 'Status OK: No software updates required.'
                     }
                 }
-            } else { $ReportData.WingetStatus = "Failed: Winget command not found." }
-        } catch { $ReportData.WingetStatus = "Error: Winget execution failed." }
+            } else { $ReportData.WingetStatus = 'Failed: Winget command not found.' }
+        } catch { $ReportData.WingetStatus = 'Error: Winget execution failed.' }
     }
-    Write-Host "   > Done." -ForegroundColor Green
+    Write-Host '   > Done.' -ForegroundColor Green
 }
 
 # --- 12. WINDOWS UPDATES ---
-if (Test-UserSkip -StepName "Windows Update Check") {
-    $ReportData.Updates = "Skipped by Engineer."
+if (Test-UserSkip -StepName 'Windows Update Check') {
+    $ReportData.Updates = 'Skipped by Engineer.'
 } else {
-    Write-Host "   > Checking for updates..." -ForegroundColor Yellow
+    Write-Host '   > Checking for updates...' -ForegroundColor Yellow
     if ($DemoMode) {
-        $ReportData.Updates = "Action Required: 2 updates pending."
+        $ReportData.Updates = 'Action Required: 2 updates pending.'
     } else {
         try {
             $UpdateSession = New-Object -ComObject Microsoft.Update.Session
@@ -522,10 +529,10 @@ if (Test-UserSkip -StepName "Windows Update Check") {
                 for ($i = 0; $i -lt $Count; $i++) { $UpdateItem = $SearchResult.Updates.Item($i); $PendingUpdates += "<li>$($UpdateItem.Title)</li>" }
                 $UpdateListHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em; color:#d9534f;'>$($PendingUpdates -join '')</ul>"
                 $ReportData.Updates = "Action Required: $Count updates pending.<br>$UpdateListHTML" 
-            } else { $ReportData.Updates = "Status OK: System is up to date." }
-        } catch { $ReportData.Updates = "Manual Check Required." }
+            } else { $ReportData.Updates = 'Status OK: System is up to date.' }
+        } catch { $ReportData.Updates = 'Manual Check Required.' }
     }
-    Write-Host "   > Done." -ForegroundColor Green
+    Write-Host '   > Done.' -ForegroundColor Green
 }
 
 # --- 13. DISK OPTIMIZATION ---
@@ -535,12 +542,12 @@ if ($DemoMode) { $IsSSD = $false } else {
 }
 
 if ($IsSSD) {
-    Write-Host "   > Drive Type Detected: SSD/NVMe (Solid State Drive)" -ForegroundColor Green
-    Write-Host "   > SKIPPING DEFRAGMENTATION (Not required for this drive type)." -ForegroundColor Green
-    $ReportData.Defrag = "Scan not required for SSD/NVMe"
+    Write-Host '   > Drive Type Detected: SSD/NVMe (Solid State Drive)' -ForegroundColor Green
+    Write-Host '   > SKIPPING DEFRAGMENTATION (Not required for this drive type).' -ForegroundColor Green
+    $ReportData.Defrag = 'Scan not required for SSD/NVMe'
 } else {
-    Write-Host "   > Drive Type Detected: HDD (Hard Disk Drive)" -ForegroundColor Yellow
-    Write-Host "   [Y] Yes  |  [N] No (Default)  |  [Enter] Default" -ForegroundColor Gray
+    Write-Host '   > Drive Type Detected: HDD (Hard Disk Drive)' -ForegroundColor Yellow
+    Write-Host '   [Y] Yes  |  [N] No (Default)  |  [Enter] Default' -ForegroundColor Gray
     while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) }
 
     $OptimizeChoice = $null
@@ -560,16 +567,16 @@ if ($IsSSD) {
     Write-Host "`r                                                              " -NoNewline
 
     if ($OptimizeChoice -eq 'Y') {
-        Write-Host "`r   > Option Selected: YES                                     " -ForegroundColor Green
-        if ($DemoMode) { Start-Sleep -Seconds 1; $ReportData.Defrag = "Optimization Complete." } 
-        else { Write-Host "   > Optimizing Drive C:..." -ForegroundColor Yellow; Optimize-Volume -DriveLetter C -Defrag -Verbose | Out-Null; $ReportData.Defrag = "Optimization Complete: Drive C: optimized." }
-        Write-Host "   > Done." -ForegroundColor Green
+        Write-Host '   > Option Selected: YES                                     ' -ForegroundColor Green
+        if ($DemoMode) { Start-Sleep -Seconds 1; $ReportData.Defrag = 'Optimization Complete.' } 
+        else { Write-Host '   > Optimizing Drive C:...' -ForegroundColor Yellow; Optimize-Volume -DriveLetter C -Defrag -Verbose | Out-Null; $ReportData.Defrag = 'Optimization Complete: Drive C: optimized.' }
+        Write-Host '   > Done.' -ForegroundColor Green
     } elseif ($OptimizeChoice -in 'ENTER','TIMEOUT') {
-        Write-Host "`r   > Option Selected: DEFAULT (No Input)                      " -ForegroundColor Yellow
-        $ReportData.Defrag = "Skipped: No Input"
+        Write-Host '   > Option Selected: DEFAULT (No Input)                      ' -ForegroundColor Yellow
+        $ReportData.Defrag = 'Skipped: No Input'
     } else {
-        Write-Host "`r   > SKIPPED: Disk Optimization.                              " -ForegroundColor Yellow
-        $ReportData.Defrag = "Skipped by Engineer."
+        Write-Host '   > SKIPPED: Disk Optimization.                              ' -ForegroundColor Yellow
+        $ReportData.Defrag = 'Skipped by Engineer.'
     }
 }
 
