@@ -1,25 +1,21 @@
 <#
 .SYNOPSIS
-    Apollo Technology Full Health Check Script v17.7 (Fixed Winget & Report Path)
+    Apollo Technology Full Health Check Script v17.8 (New UI & Fixed Winget)
 .DESCRIPTION
     Full system health check.
     - REMOVED: Temperature sensors.
     - RETAINED: GPU Detection in Device Details.
     - NEW: Red "[NOTICE] Running in Elevated Permissions" warning on startup.
-    - UPDATED: Disk Optimization now auto-skips on SSD/NVMe drives with specific report message.
+    - UPDATED: Disk Optimization now auto-skips on SSD/NVMe drives.
     - NEW: NVMe/SSD/HDD Detection with SMART Status.
     - NEW: Detailed Device Information Section.
     - NEW: Customer/Ticket Input Validation Loop.
     - NEW: Added Network Adapter Information to Device Info.
     - UPDATED: Split DISM and SFC into separate logic blocks.
-    - UPDATED: DISM now runs CheckHealth -> ScanHealth -> RestoreHealth sequentially.
     - RETAINED: Prevents Windows from Sleeping/Locking while running.
-    - UPDATED: Report strictly saves to C:\temp\Apollo_Reports (Removed Public Desktop copy).
-    - Storage Analysis with Pie Chart & Top Folder usage.
-    - Captures and embeds SFC [SR] logs into the report.
-    - PATCH: Added check for cleanmgr.exe to prevent crash on Server 2008.
-    - UPDATED: Filename format changed to Health_Check_CustomerName_TicketNumber.
+    - UPDATED: Report strictly saves to C:\temp\Apollo_Reports.
     - FIXED: Winget execution logic with prompt bypasses.
+    - NEW UI: Report HTML/PDF generation completely refactored to match Hardware Diagnostics style.
 .NOTES
     Author: Apollo Technology (Lewis Wiltshire)
     Updated by: Gemini
@@ -148,7 +144,7 @@ if ($isAdmin) {
     Write-Host "      [NOTICE] Running as Standard User" -ForegroundColor Yellow 
 }
 
-Write-Host "        Created by Lewis Wiltshire, Version 17.7" -ForegroundColor Yellow
+Write-Host "        Created by Lewis Wiltshire, Version 17.8" -ForegroundColor Yellow
 Write-Host "      [POWER] Sleep Mode & Screen Timeout Blocked." -ForegroundColor DarkGray
 
 # --- STRICT PATH SETUP ---
@@ -210,17 +206,13 @@ while ($true) {
 $CurrentDate = Get-Date -Format "yyyy-MM-dd HH:mm"
 $CurrentYear = (Get-Date).Year
 
-# --- CHANGED: FILE NAMING LOGIC ---
-# Create filename friendly versions (Remove # from ticket, remove illegal chars from name)
+# --- FILE NAMING LOGIC ---
 $TicketForFile = $TicketNumber -replace "#",""
 $CustomerForFile = $CustomerName -replace '[\\/:*?"<>|]', '' 
-
-# Format: Health_Check_CustomerName_TicketNumber
 $ReportFilename = "Health_Check_$($CustomerForFile)_$($TicketForFile)"
 
 $ReportData = @{}
-$StorageReportHTML = "" # Initialize Storage HTML
-$SfcLogContent = "" # Initialize Log Content
+$SfcLogContent = "" 
 
 # Email Creds
 $EmailCreds = $null
@@ -243,7 +235,7 @@ if ($OSInfo.InstallDate) {
     try { $FormattedInstallDate = $OSInfo.InstallDate.ToString("yyyy-MM-dd HH:mm") } catch {}
 }
 
-# --- GPU DETECTION (RETAINED) ---
+# --- GPU DETECTION ---
 try {
     $GPUInfo = Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name -Unique
     $GPUString = $GPUInfo -join ", "
@@ -251,14 +243,14 @@ try {
     $GPUString = "Unknown / Standard VGA Adapter"
 }
 
-# --- NEW: NETWORK ADAPTER DETECTION ---
+# --- NETWORK ADAPTER DETECTION ---
 $NetworkAdaptersHTML = ""
 try {
     $Adapters = Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' }
     foreach ($nic in $Adapters) {
         $ipInfo = Get-NetIPAddress -InterfaceAlias $nic.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue
         $ip = if ($ipInfo) { $ipInfo.IPAddress } else { "No IPv4" }
-        $NetworkAdaptersHTML += "<li><strong>$($nic.Name)</strong>: $($nic.InterfaceDescription) (Speed: $($nic.LinkSpeed), IP: $ip)</li>"
+        $NetworkAdaptersHTML += "<li><strong>$($nic.Name)</strong>: $($nic.InterfaceDescription) (IP: $ip)</li>"
     }
     if ([string]::IsNullOrWhiteSpace($NetworkAdaptersHTML)) {
         $NetworkAdaptersHTML = "<li>No active physical network adapters found.</li>"
@@ -267,12 +259,11 @@ try {
     $NetworkAdaptersHTML = "<li>Unable to retrieve network adapter info.</li>"
 }
 
-# DRIVE DETECTION (NVMe/SSD/HDD + SMART)
+# --- DRIVE DETECTION ---
 $PhysicalDisks = Get-PhysicalDisk | Sort-Object DeviceId
 $DriveListHTML = ""
 
 foreach ($disk in $PhysicalDisks) {
-    # Type Logic
     $Type = ""
     if ($disk.MediaType -eq "HDD") { $Type = "Hard Disk Drive (HDD)" }
     elseif ($disk.MediaType -eq "SSD") {
@@ -281,14 +272,11 @@ foreach ($disk in $PhysicalDisks) {
     }
     else { $Type = "Unknown ($($disk.MediaType))" }
     
-    # Size Logic
     $SizeGB = [math]::Round($disk.Size / 1GB, 2)
     $SizeStr = if ($SizeGB -gt 1000) { "$([math]::Round($SizeGB / 1024, 2)) TB" } else { "$SizeGB GB" }
-
-    # Health Logic
     $HealthColor = if ($disk.HealthStatus -eq "Healthy") { "green" } else { "red" }
     
-    $DriveListHTML += "<li><strong>Disk $($disk.DeviceId):</strong> $Type <br> Size: $SizeStr | Health: <span style='color:$HealthColor'>$($disk.HealthStatus)</span></li>"
+    $DriveListHTML += "<li><strong>Disk $($disk.DeviceId):</strong> $Type ($SizeStr) | Health: <span style='color:$HealthColor'>$($disk.HealthStatus)</span></li>"
 }
 
 # --- 5. SYSTEM RESTORE POINT ---
@@ -334,7 +322,6 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
         Start-Sleep -Seconds 1
         $ReportData.DiskCleanup = "Maintenance Complete: Removed 1.2GB of temporary files."
     } else {
-        # PATCH: Check if cleanmgr.exe exists before running
         if (Get-Command "cleanmgr.exe" -ErrorAction SilentlyContinue) {
             $StateFlags = 1337
             $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
@@ -359,122 +346,36 @@ if (Test-UserSkip -StepName "Disk Cleanup") {
 
 # --- 8. STORAGE ANALYSIS ---
 Write-Host "`n[INFO] Analyzing Storage Usage..." -ForegroundColor Yellow
-
-$StorageUsedGB = 0
-$StorageFreeGB = 0
-$StorageTotalGB = 0
-$StoragePercent = 0
-$StorageTableRows = ""
+$StorageUsedGB = 0; $StorageFreeGB = 0; $StorageTotalGB = 0; $StoragePercent = 0; $StorageTableRows = ""
 
 if ($DemoMode) {
     Start-Sleep -Seconds 2
-    # DUMMY DATA
-    $StorageUsedGB = 340.5
-    $StorageFreeGB = 135.5
-    $StorageTotalGB = 476.0
-    $StoragePercent = 71
-    $StorageTableRows = @"
-    <tr><td>C:\Users\Apollo</td><td>120.4 GB</td></tr>
-    <tr><td>C:\Windows</td><td>45.2 GB</td></tr>
-    <tr><td>C:\Program Files</td><td>32.1 GB</td></tr>
-    <tr><td>C:\Program Files (x86)</td><td>18.5 GB</td></tr>
-    <tr><td>C:\hiberfil.sys</td><td>12.0 GB</td></tr>
-"@
+    $StorageUsedGB = 340.5; $StorageFreeGB = 135.5; $StorageTotalGB = 476.0; $StoragePercent = 71
+    $StorageTableRows = "<tr><td>C:\Users\Apollo</td><td>120.4 GB</td></tr><tr><td>C:\Windows</td><td>45.2 GB</td></tr><tr><td>C:\Program Files</td><td>32.1 GB</td></tr>"
 } else {
     try {
-        # 1. Get Drive Info
         $Drive = Get-PSDrive C -ErrorAction SilentlyContinue
         if ($Drive) {
             $StorageUsedGB  = [math]::Round($Drive.Used / 1GB, 2)
             $StorageFreeGB  = [math]::Round($Drive.Free / 1GB, 2)
             $StorageTotalGB = [math]::Round(($Drive.Used + $Drive.Free) / 1GB, 2)
-            
-            if ($StorageTotalGB -gt 0) {
-                $StoragePercent = [math]::Round(($StorageUsedGB / $StorageTotalGB) * 100)
-            }
+            if ($StorageTotalGB -gt 0) { $StoragePercent = [math]::Round(($StorageUsedGB / $StorageTotalGB) * 100) }
         }
-
-        # 2. Get Top Heavy Folders/Files (Root Level)
         Write-Host "   > Scanning largest folders in C:\ (This may take a moment)..." -ForegroundColor Yellow
         $RootItems = Get-ChildItem "C:\" -Force -ErrorAction SilentlyContinue
         $FolderStats = @()
-        
         foreach ($Item in $RootItems) {
             try {
-                $Size = 0
-                if ($Item.PSIsContainer) {
-                    $Size = (Get-ChildItem $Item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-                } else {
-                    $Size = $Item.Length
-                }
-                
-                if ($Size -gt 100MB) {
-                    $Stats = [PSCustomObject]@{
-                        Name = $Item.FullName
-                        SizeGB = [math]::Round($Size / 1GB, 2)
-                    }
-                    $FolderStats += $Stats
-                }
+                $Size = if ($Item.PSIsContainer) { (Get-ChildItem $Item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum } else { $Item.Length }
+                if ($Size -gt 100MB) { $FolderStats += [PSCustomObject]@{ Name = $Item.FullName; SizeGB = [math]::Round($Size / 1GB, 2) } }
             } catch { }
         }
-        
-        # Sort and build HTML Rows
-        $TopFolders = $FolderStats | Sort-Object SizeGB -Descending | Select-Object -First 5
-        foreach ($f in $TopFolders) {
-            $StorageTableRows += "<tr><td>$($f.Name)</td><td>$($f.SizeGB) GB</td></tr>"
-        }
-        
+        $TopFolders = $FolderStats | Sort-Object SizeGB -Descending | Select-Object -First 4
+        foreach ($f in $TopFolders) { $StorageTableRows += "<tr><td>$($f.Name)</td><td>$($f.SizeGB) GB</td></tr>" }
     } catch {
         $StorageTableRows = "<tr><td colspan='2'>Error calculating storage details.</td></tr>"
     }
 }
-
-# 3. Build HTML Section (With CSS Pie Chart)
-$StorageReportHTML = @"
-<h2>Storage Analysis</h2>
-<div class="section">
-    <div style="display: flex; align-items: center; justify-content: space-around; flex-wrap: wrap;">
-        <div style="
-            width: 160px; 
-            height: 160px; 
-            border-radius: 50%; 
-            background: conic-gradient(#d9534f 0% $($StoragePercent)%, #5cb85c $($StoragePercent)% 100%);
-            border: 4px solid #fff;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            position: relative;
-        ">
-            <div style="
-                position: absolute; top: 50%; left: 50%; 
-                transform: translate(-50%, -50%); 
-                font-weight: bold; font-size: 1.2em; color: #fff; text-shadow: 0px 0px 3px #000;">
-                $($StoragePercent)% Used
-            </div>
-        </div>
-        
-        <div style="padding: 10px;">
-            <ul style="list-style: none; padding: 0;">
-                <li style="margin-bottom:5px;"><span style="display:inline-block; width:15px; height:15px; background:#d9534f; margin-right:5px;"></span><strong>Used Space:</strong> $StorageUsedGB GB</li>
-                <li style="margin-bottom:5px;"><span style="display:inline-block; width:15px; height:15px; background:#5cb85c; margin-right:5px;"></span><strong>Free Space:</strong> $StorageFreeGB GB</li>
-                <li style="border-top:1px solid #ccc; padding-top:5px; margin-top:5px;"><strong>Total Capacity:</strong> $StorageTotalGB GB</li>
-            </ul>
-        </div>
-    </div>
-
-    <h3 style="margin-top: 20px; font-size: 1em; color: #444; border-bottom: 1px solid #ddd; padding-bottom: 5px;">Largest Items (Root Directory)</h3>
-    <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
-        <thead>
-            <tr style="background: #eee; text-align: left;">
-                <th style="padding: 8px; border-bottom: 1px solid #ddd;">Directory / File</th>
-                <th style="padding: 8px; border-bottom: 1px solid #ddd;">Size</th>
-            </tr>
-        </thead>
-        <tbody>
-            $StorageTableRows
-        </tbody>
-    </table>
-</div>
-"@
-
 Write-Host "   > Done." -ForegroundColor Green
 
 # --- 9. INSTALLED APPLICATIONS ---
@@ -482,21 +383,13 @@ Write-Host "`n[INFO] Listing Installed Applications (Instant)..." -ForegroundCol
 if ($DemoMode) {
     $AppListHTML = "<li>Microsoft Office 365</li><li>Google Chrome</li><li>Adobe Acrobat Reader</li><li>Zoom Workplace</li><li>7-Zip 23.01</li><li>VLC Media Player</li><li>Microsoft Teams</li>"
 } else {
-    $UninstallKeys = @(
-        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
-        "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
-    )
-    $Apps = foreach ($key in $UninstallKeys) {
-        if (Test-Path $key) {
-            Get-ChildItem $key | Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.UninstallString } | Select-Object -ExpandProperty DisplayName
-        }
-    }
+    $UninstallKeys = @("HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall", "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall", "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall")
+    $Apps = foreach ($key in $UninstallKeys) { if (Test-Path $key) { Get-ChildItem $key | Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and $_.UninstallString } | Select-Object -ExpandProperty DisplayName } }
     $AppListHTML = ($Apps | Sort-Object -Unique | ForEach-Object { "<li>$_</li>" }) -join ""
 }
 Write-Host "   > Done." -ForegroundColor Green
 
-# --- 10a. DISM SCANS (SEQUENTIAL) ---
+# --- 10a. DISM SCANS ---
 if (Test-UserSkip -StepName "DISM Health Checks" -Seconds 5) {
     $ReportData.DismStatus = "Skipped by Engineer."
 } else {
@@ -504,80 +397,50 @@ if (Test-UserSkip -StepName "DISM Health Checks" -Seconds 5) {
         Write-Host "      [33%] DISM CheckHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
         Write-Host "      [66%] DISM ScanHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
         Write-Host "      [100%] DISM RestoreHealth..." -NoNewline; Start-Sleep -Seconds 1; Write-Host " OK" -ForegroundColor Green
-        $ReportData.DismStatus = "Success: No corruption found (Demo)."
+        $ReportData.DismStatus = "Success: No corruption found."
     } else {
-        # 1. CheckHealth
         Write-Host "   > Running DISM /CheckHealth..." -ForegroundColor Yellow
         $DismCheck = Dism /Online /Cleanup-Image /CheckHealth 2>&1 | Out-String
-
-        # 2. ScanHealth
         Write-Host "   > Running DISM /ScanHealth..." -ForegroundColor Yellow
         $DismScan = Dism /Online /Cleanup-Image /ScanHealth 2>&1 | Out-String
-
-        # 3. RestoreHealth
         Write-Host "   > Running DISM /RestoreHealth..." -ForegroundColor Yellow
         $DismRestore = Dism /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
         
-        # Analyze Results
-        $DismSummary = "<strong>CheckHealth:</strong> "
-        if ($DismCheck -match "No component store corruption detected") { $DismSummary += "No corruption detected.<br>" } else { $DismSummary += "Corruption detected (or unknown result).<br>" }
-        
-        $DismSummary += "<strong>ScanHealth:</strong> "
-        if ($DismScan -match "No component store corruption detected") { $DismSummary += "No corruption detected.<br>" } else { $DismSummary += "Issues found.<br>" }
-
-        $DismSummary += "<strong>RestoreHealth:</strong> "
-        if ($DismRestore -match "The restore operation completed successfully") { $DismSummary += "Completed successfully." } else { $DismSummary += "Operation completed (Check logs)." }
-        
+        $DismSummary = "<strong>CheckHealth:</strong> " + (if ($DismCheck -match "No component store corruption") { "No corruption.<br>" } else { "Corruption detected.<br>" })
+        $DismSummary += "<strong>ScanHealth:</strong> " + (if ($DismScan -match "No component store corruption") { "No corruption.<br>" } else { "Issues found.<br>" })
+        $DismSummary += "<strong>RestoreHealth:</strong> " + (if ($DismRestore -match "completed successfully") { "Completed successfully." } else { "Completed (Check logs)." })
         $ReportData.DismStatus = $DismSummary
     }
     Write-Host "   > DISM Checks Completed." -ForegroundColor Green
 }
 
-# --- 10b. SFC SCAN (AFTER DISM) ---
+# --- 10b. SFC SCAN ---
 if (Test-UserSkip -StepName "SFC (System File Checker)" -Seconds 5) {
     $ReportData.SfcStatus = "Skipped by Engineer."
 } else {
     if ($DemoMode) {
         Write-Host "      [75%] SFC /Scannow..." -NoNewline; Start-Sleep -Seconds 2; Write-Host " OK" -ForegroundColor Green
-        $ReportData.SfcStatus = "Issues Found & Repaired (See logs below)."
-        $SfcLogContent = "2024-03-15 [SR] Repairing corrupted file \SystemRoot\Win32\webio.dll"
+        $ReportData.SfcStatus = "Issues Found & Repaired."
     } else {
-        # SFC
         Write-Host "   > Running SFC /Scannow..." -ForegroundColor Yellow
         $SfcOut = sfc /scannow 2>&1 | Out-String
+        if ($SfcOut -match "found no integrity violations") { $SfcStatus = "Healthy (No integrity violations found)." }
+        elseif ($SfcOut -match "found corrupt files and successfully repaired") { $SfcStatus = "<span style='color:green'><strong>FIXED:</strong> Corrupt files successfully repaired.</span>" } 
+        elseif ($SfcOut -match "found corrupt files but was unable to fix") { $SfcStatus = "<span style='color:red'><strong>CRITICAL:</strong> Corrupt files found, Windows could NOT fix them.</span>" } 
+        else { $SfcStatus = "Scan Completed." }
         
-        # Analyze Results
-        $SfcStatus = "Unknown"
-        if ($SfcOut -match "found no integrity violations") {
-            $SfcStatus = "Healthy (No integrity violations found)."
-        }
-        elseif ($SfcOut -match "found corrupt files and successfully repaired") {
-            $SfcStatus = "<span style='color:green'><strong>FIXED:</strong> Corrupt files found and successfully repaired.</span>"
-            try {
-                $CBSLog = "$env:windir\Logs\CBS\CBS.log"
-                if (Test-Path $CBSLog) {
-                    $SfcLogContent = Get-Content $CBSLog | Select-String "\[SR\]" | Select-Object -Last 20 | Out-String
-                }
-            } catch { $SfcLogContent = "Error reading CBS.log: $_" }
-            
-        } elseif ($SfcOut -match "found corrupt files but was unable to fix") {
-            $SfcStatus = "<span style='color:red'><strong>CRITICAL:</strong> Corrupt files found but Windows could NOT fix them. Manual intervention required.</span>"
-            try {
-                $CBSLog = "$env:windir\Logs\CBS\CBS.log"
-                if (Test-Path $CBSLog) {
-                    $SfcLogContent = Get-Content $CBSLog | Select-String "\[SR\]" | Select-Object -Last 20 | Out-String
-                }
-            } catch { $SfcLogContent = "Error reading CBS.log: $_" }
-        } else {
-            $SfcStatus = "Scan Completed (Check logs below for details)."
-        }
-        
+        try {
+            $CBSLog = "$env:windir\Logs\CBS\CBS.log"
+            if (Test-Path $CBSLog -and ($SfcStatus -match "FIXED|CRITICAL")) {
+                $SfcLogContent = Get-Content $CBSLog | Select-String "\[SR\]" | Select-Object -Last 10 | Out-String
+            }
+        } catch { }
         $ReportData.SfcStatus = $SfcStatus
     }
     Write-Host "   > SFC Scan Completed." -ForegroundColor Green
 }
 
-# --- 11. WINGET SOFTWARE UPDATES (FIXED) ---
+# --- 11. WINGET SOFTWARE UPDATES ---
 if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
     $ReportData.WingetStatus = "Skipped by Engineer."
 } else {
@@ -587,67 +450,39 @@ if (Test-UserSkip -StepName "Software Updates (Winget)" -Seconds 5) {
         $ReportData.WingetStatus = "Success: Packages updated."
     } else {
         try {
-            # ATTEMPT TO FIND WINGET EXECUTABLE
             $WingetExe = Get-Command "winget" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-            
-            # If not found in path, check common local appdata location for the current user
-            if (-not $WingetExe) {
-                $LocalWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
-                if (Test-Path $LocalWinget) { $WingetExe = $LocalWinget }
-            }
-
+            if (-not $WingetExe) { $LocalWinget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"; if (Test-Path $LocalWinget) { $WingetExe = $LocalWinget } }
             if ($WingetExe) {
-                # 1. GET LIST OF UPDATES - NOW INCLUDES BYPASS FLAGS
                 $UpgradeListRaw = cmd /c "winget upgrade --accept-source-agreements --disable-interactivity" 2>&1 | Out-String
-                
                 $PackagesToUpdate = @()
                 
                 if ($UpgradeListRaw -match "No installed package found matching input criteria") {
                     $ReportData.WingetStatus = "Status OK: No software updates found."
                 } else {
-                    # Parse the output (Cleaner Logic)
-                    $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { 
-                        $_ -notmatch "^Name|^---|^\s*$" -and $_.Length -gt 10
-                    }
-                    
+                    $Lines = $UpgradeListRaw -split "`r`n" | Where-Object { $_ -notmatch "^Name|^---|^\s*$" -and $_.Length -gt 10 }
                     foreach ($Line in $Lines) {
-                        # Take the first 40 chars of the line (The Name column usually)
-                        $CleanName = $Line.Trim()
-                        if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + "..." }
+                        $CleanName = $Line.Trim(); if ($CleanName.Length -gt 40) { $CleanName = $CleanName.Substring(0, 40) + "..." }
                         $PackagesToUpdate += "<li>$CleanName</li>"
                     }
-
-                    # 2. RUN UPDATES IF FOUND
                     if ($PackagesToUpdate.Count -gt 0) {
                         $PackageHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em;'>$($PackagesToUpdate -join '')</ul>"
                         Write-Host "   > Installing updates..." -ForegroundColor Yellow
-                        
-                        # Added --include-unknown and --disable-interactivity to catch tricky version numbers and prompts
                         $ProcArgs = "upgrade --all --accept-source-agreements --accept-package-agreements --include-unknown --disable-interactivity"
-                        
                         $WingetProcess = Start-Process -FilePath $WingetExe -ArgumentList $ProcArgs -Wait -PassThru -NoNewWindow
                         
-                        if ($WingetProcess.ExitCode -eq 0) {
-                             $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML"
-                        } else {
-                             $ReportData.WingetStatus = "Warning: Winget returned code $($WingetProcess.ExitCode).<br>Targeted packages:<br>$PackageHTML"
-                        }
+                        if ($WingetProcess.ExitCode -eq 0) { $ReportData.WingetStatus = "Success: The following packages were updated:<br>$PackageHTML" } 
+                        else { $ReportData.WingetStatus = "Warning: Winget returned code $($WingetProcess.ExitCode).<br>Targeted packages:<br>$PackageHTML" }
                     } else {
                         $ReportData.WingetStatus = "Status OK: No software updates required."
                     }
                 }
-            } else {
-                 Write-Warning "Winget executable not found in Path or LocalAppData."
-                 $ReportData.WingetStatus = "Failed: Winget command not found on system."
-            }
-        } catch {
-            $ReportData.WingetStatus = "Error: Winget execution failed ($($_.Exception.Message))."
-        }
+            } else { $ReportData.WingetStatus = "Failed: Winget command not found." }
+        } catch { $ReportData.WingetStatus = "Error: Winget execution failed." }
     }
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 12. WINDOWS UPDATES (PENDING LIST) ---
+# --- 12. WINDOWS UPDATES ---
 if (Test-UserSkip -StepName "Windows Update Check") {
     $ReportData.Updates = "Skipped by Engineer."
 } else {
@@ -660,129 +495,153 @@ if (Test-UserSkip -StepName "Windows Update Check") {
             $UpdateSearcher = $UpdateSession.CreateUpdateSearcher()
             $SearchResult = $UpdateSearcher.Search("IsInstalled=0")
             $Count = $SearchResult.Updates.Count
-            
             if ($Count -gt 0) { 
                 $PendingUpdates = @()
-                for ($i = 0; $i -lt $Count; $i++) {
-                    $UpdateItem = $SearchResult.Updates.Item($i)
-                    $PendingUpdates += "<li>$($UpdateItem.Title)</li>"
-                }
+                for ($i = 0; $i -lt $Count; $i++) { $UpdateItem = $SearchResult.Updates.Item($i); $PendingUpdates += "<li>$($UpdateItem.Title)</li>" }
                 $UpdateListHTML = "<ul style='margin-top:5px; margin-bottom:5px; font-size:0.9em; color:#d9534f;'>$($PendingUpdates -join '')</ul>"
                 $ReportData.Updates = "Action Required: $Count updates pending.<br>$UpdateListHTML" 
-            } 
-            else { 
-                $ReportData.Updates = "Status OK: System is up to date." 
-            }
-        } catch {
-            $ReportData.Updates = "Manual Check Required (Error accessing COM Object)."
-        }
+            } else { $ReportData.Updates = "Status OK: System is up to date." }
+        } catch { $ReportData.Updates = "Manual Check Required." }
     }
     Write-Host "   > Done." -ForegroundColor Green
 }
 
-# --- 13. DISK OPTIMIZATION (UPDATED LOGIC) ---
+# --- 13. DISK OPTIMIZATION ---
 Write-Host "`n   [NEXT STEP] Disk Defragmentation" -ForegroundColor Cyan
-
-# Check if C: drive is SSD/NVMe or HDD
-if ($DemoMode) { $IsSSD = $false }
-else {
-    try {
-        # Determine media type of System Drive (C:)
-        $SystemDisk = Get-Partition -DriveLetter C -ErrorAction SilentlyContinue | Get-Disk | Get-PhysicalDisk
-        # NVMe drives report as SSD MediaType in Powershell (BusType is NVMe)
-        $IsSSD = ($SystemDisk.MediaType -eq 'SSD')
-    } catch { $IsSSD = $false }
+if ($DemoMode) { $IsSSD = $false } else {
+    try { $SystemDisk = Get-Partition -DriveLetter C -ErrorAction SilentlyContinue | Get-Disk | Get-PhysicalDisk; $IsSSD = ($SystemDisk.MediaType -eq 'SSD') } catch { $IsSSD = $false }
 }
 
 if ($IsSSD) {
     Write-Host "   > Drive Type Detected: SSD/NVMe (Solid State Drive)" -ForegroundColor Green
     Write-Host "   > SKIPPING DEFRAGMENTATION (Not required for this drive type)." -ForegroundColor Green
-    $ReportData.Defrag = "Scan not required for this drive type"
+    $ReportData.Defrag = "Scan not required for SSD/NVMe"
 } else {
-    # It is a HDD (or unknown), so run the existing prompt/timer logic
     Write-Host "   > Drive Type Detected: HDD (Hard Disk Drive)" -ForegroundColor Yellow
     Write-Host "   [Y] Yes  |  [N] No (Default)  |  [Enter] Default" -ForegroundColor Gray
-
-    # Flush buffer
     while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) }
 
     $OptimizeChoice = $null
-    $Timeout = 60
-    $EndTime = (Get-Date).AddSeconds($Timeout)
+    $EndTime = (Get-Date).AddSeconds(60)
 
     while ((Get-Date) -lt $EndTime) {
         $Remaining = [math]::Ceiling(($EndTime - (Get-Date)).TotalSeconds)
         Write-Host "`r   > Waiting for input (Default: No) in $Remaining seconds...   " -NoNewline -ForegroundColor Yellow
-        
         if ([Console]::KeyAvailable) {
-            $KeyInfo = [Console]::ReadKey($true)
-            $Key = $KeyInfo.Key.ToString().ToUpper()
-            
-            if ($Key -eq "Y") { $OptimizeChoice = "Y"; break }
-            if ($Key -eq "N") { $OptimizeChoice = "N"; break }
-            if ($Key -eq "ENTER") { $OptimizeChoice = "ENTER"; break }
+            $Key = [Console]::ReadKey($true).Key.ToString().ToUpper()
+            if ($Key -in "Y","N","ENTER") { $OptimizeChoice = $Key; break }
         }
         Start-Sleep -Milliseconds 100
     }
 
-    # Default to 'N' if timeout occurred
-    if ([string]::IsNullOrWhiteSpace($OptimizeChoice)) { 
-        $OptimizeChoice = 'TIMEOUT' 
-        Write-Host "`r   > Timeout reached. Selecting Default: No.                  " -ForegroundColor Yellow
-    } else {
-        Write-Host "`r                                                              " -NoNewline
-    }
+    if ([string]::IsNullOrWhiteSpace($OptimizeChoice)) { $OptimizeChoice = 'TIMEOUT' }
+    Write-Host "`r                                                              " -NoNewline
 
     if ($OptimizeChoice -eq 'Y') {
         Write-Host "`r   > Option Selected: YES                                     " -ForegroundColor Green
-        if ($DemoMode) {
-            Start-Sleep -Seconds 1
-            $ReportData.Defrag = "Optimization Complete."
-        } else {
-            Write-Host "   > Optimizing Drive C:..." -ForegroundColor Yellow
-            Optimize-Volume -DriveLetter C -Analyze -Verbose | Out-Null
-            Optimize-Volume -DriveLetter C -Defrag -Verbose | Out-Null
-            $ReportData.Defrag = "Optimization Complete: Drive C: optimized."
-        }
+        if ($DemoMode) { Start-Sleep -Seconds 1; $ReportData.Defrag = "Optimization Complete." } 
+        else { Write-Host "   > Optimizing Drive C:..." -ForegroundColor Yellow; Optimize-Volume -DriveLetter C -Defrag -Verbose | Out-Null; $ReportData.Defrag = "Optimization Complete: Drive C: optimized." }
         Write-Host "   > Done." -ForegroundColor Green
-
-    } elseif ($OptimizeChoice -eq 'ENTER') {
+    } elseif ($OptimizeChoice -in 'ENTER','TIMEOUT') {
         Write-Host "`r   > Option Selected: DEFAULT (No Input)                      " -ForegroundColor Yellow
         $ReportData.Defrag = "Skipped: No Input"
-
     } else {
         Write-Host "`r   > SKIPPED: Disk Optimization.                              " -ForegroundColor Yellow
         $ReportData.Defrag = "Skipped by Engineer."
     }
 }
 
-# --- 14. GENERATE REPORT ---
-Write-Host "`n[REPORT] Generating Report..." -ForegroundColor Yellow
+# --- 14. NEW REPORT GENERATION ARRAY BUILDER ---
+Write-Host "`n[REPORT] Generating Diagnostic Style Report..." -ForegroundColor Yellow
 
 # CHECK INTERNET FOR REPORT
-if ($DemoMode) {
+if ($DemoMode -or (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
     $ReportData.Internet = "Active (Verified)"
-} elseif (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet -ErrorAction SilentlyContinue) {
-    $ReportData.Internet = "Active (Verified)"
-} else {
-    $ReportData.Internet = "Disconnected"
+} else { $ReportData.Internet = "Disconnected" }
+
+$ReportItems = @()
+function Add-Result($Category, $Component, $Details, $Status) {
+    $script:ReportItems += [PSCustomObject]@{ Category = $Category; Component = $Component; Details = $Details; Status = $Status }
 }
 
-# Build Log HTML Section if content exists
-$LogSectionHTML = ""
-if (-not [string]::IsNullOrWhiteSpace($SfcLogContent)) {
-    $LogSectionHTML = @"
-    <h2>Diagnostic Logs (SFC Details)</h2>
-    <div class="section">
-        <div style="background:#f0f0f0; padding:10px; border:1px solid #ccc; font-family:Consolas, monospace; font-size:0.8em; white-space:pre-wrap;">$SfcLogContent</div>
+# 1. Device Information
+Add-Result "Device Information" "Hostname & OS" "<b>Name:</b> $($ComputerInfo.Name)<br><b>OS:</b> $($OSInfo.Caption) $($OSInfo.OSArchitecture) ($($OSInfo.Version))<br><b>Install Date:</b> $FormattedInstallDate" "OK"
+Add-Result "Device Information" "Compute & Graphics" "<b>CPU:</b> $($CPUInfo.Name)<br><b>Cores/Threads:</b> $($CPUInfo.NumberOfCores)C / $($CPUInfo.NumberOfLogicalProcessors)T<br><b>RAM Size:</b> $([math]::Round($ComputerInfo.TotalPhysicalMemory / 1GB, 0)) GB<br><b>GPU:</b> $GPUString" "OK"
+Add-Result "Device Information" "Network Adapters" "<ul style='margin:0; padding-left:20px;'>$NetworkAdaptersHTML</ul>" "Info"
+Add-Result "Device Information" "Physical Disks" "<ul style='margin:0; padding-left:20px;'>$DriveListHTML</ul>" "Info"
+
+# 2. System Status
+$IntStatus = if ($ReportData.Internet -match "Active") {"Connected"} else {"FAIL"}
+Add-Result "System Status" "Internet Connection" "<b>Status:</b> $($ReportData.Internet)" $IntStatus
+
+$BatStatus = if ($ReportData.Battery -match "OK|No Battery") {"Pass"} else {"Warning"}
+Add-Result "System Status" "Battery Health" "<b>Telemetry:</b> $($ReportData.Battery)" $BatStatus
+
+$RPStatus = if ($ReportData.RestorePoint -match "Success") {"Pass"} elseif ($ReportData.RestorePoint -match "Skipped") {"Skipped"} else {"Warning"}
+Add-Result "System Status" "System Restore Point" "<b>Creation Status:</b> $($ReportData.RestorePoint)" $RPStatus
+
+# 3. Storage Analysis (Embedded Graphic)
+$StorageDetails = @"
+<div style='display:flex; align-items:center; gap:20px; margin-bottom: 10px;'>
+    <div style='width:60px; height:60px; border-radius:50%; background:conic-gradient(#d9534f 0% $($StoragePercent)%, #5cb85c $($StoragePercent)% 100%); border:2px solid #ddd; flex-shrink: 0;'></div>
+    <div style='font-size: 0.9em;'>
+        <b>Total Capacity:</b> $StorageTotalGB GB<br>
+        <span style='color:#5cb85c;'>&#9632;</span> <b>Free:</b> $StorageFreeGB GB<br>
+        <span style='color:#d9534f;'>&#9632;</span> <b>Used:</b> $StorageUsedGB GB ($($StoragePercent)%)
     </div>
+</div>
+<b>Largest Root Items:</b>
+<table style='width:100%; font-size:0.85em; margin-top:5px; border:none; box-shadow:none;'><tbody style='border:none;'>$StorageTableRows</tbody></table>
 "@
+$StorStatus = if ($StoragePercent -lt 85) {"Pass"} else {"Warning"}
+Add-Result "Storage Analysis" "Drive C: Capacity" $StorageDetails $StorStatus
+
+# 4. Maintenance & Updates
+$DismStatColor = if ($ReportData.DismStatus -match "Corruption detected|Issues") {"FAIL"} else {"Pass"}
+Add-Result "Maintenance & Updates" "DISM Health Check" $($ReportData.DismStatus) $DismStatColor
+
+$SfcStatColor = if ($ReportData.SfcStatus -match "CRITICAL") {"FAIL"} elseif ($ReportData.SfcStatus -match "FIXED") {"Warning"} else {"Pass"}
+$SfcDetails = $($ReportData.SfcStatus)
+if ($SfcLogContent) { $SfcDetails += "<br><br><b>Logs:</b><pre style='background:#f4f4f4; padding:5px; font-size:0.8em; overflow-x:auto;'>$SfcLogContent</pre>" }
+Add-Result "Maintenance & Updates" "SFC System Integrity" $SfcDetails $SfcStatColor
+
+$WinGetColor = if ($ReportData.WingetStatus -match "Error|Failed") {"FAIL"} elseif ($ReportData.WingetStatus -match "Skipped") {"Skipped"} else {"Pass"}
+Add-Result "Maintenance & Updates" "Software Upgrades (Winget)" $($ReportData.WingetStatus) $WinGetColor
+
+$WinUpColor = if ($ReportData.Updates -match "Action Required") {"Warning"} elseif ($ReportData.Updates -match "Skipped") {"Skipped"} else {"Pass"}
+Add-Result "Maintenance & Updates" "Windows Updates" $($ReportData.Updates) $WinUpColor
+
+Add-Result "Maintenance & Updates" "Storage Cleanup" $($ReportData.DiskCleanup) "Pass"
+
+$DefragColor = if ($ReportData.Defrag -match "Skipped") {"Skipped"} else {"Pass"}
+Add-Result "Maintenance & Updates" "Disk Optimization" $($ReportData.Defrag) $DefragColor
+
+# 5. Installed Software
+Add-Result "Installed Software" "Application Inventory" "<div style='column-count:2; font-size:0.85em;'><ul style='margin:0; padding-left:15px;'>$AppListHTML</ul></div>" "Info"
+
+# --- HTML/PDF ASSEMBLY (MATCHING HARDWARECHECK.PS1) ---
+$TableRowsHTML = ""
+$CurrentCategory = ""
+
+foreach ($Row in $ReportItems) {
+    if ($Row.Category -ne $CurrentCategory) {
+        $TableRowsHTML += "<tr class='category-row'><td colspan='3'>$($Row.Category)</td></tr>"
+        $CurrentCategory = $Row.Category
+    }
+
+    $StatusColor = switch -Regex ($Row.Status) {
+        "Pass|OK|Connected|Activated|Encrypted|Enabled" { "#28a745" }
+        "Warning|Low Memory|Low Space|Degraded" { "#fd7e14" }
+        "FAIL|Error|Not Activated|Disabled" { "#dc3545" }
+        "Skipped" { "#6c757d" }
+        Default { "#17a2b8" } # Info color
+    }
+    $TableRowsHTML += "<tr><td style='width: 25%;'><strong>$($Row.Component)</strong></td><td style='width: 55%;'>$($Row.Details)</td><td style='width: 20%; text-align: center;'><strong style='color:$StatusColor'>$($Row.Status)</strong></td></tr>"
 }
 
-# SAVE PATHS - STRICTLY C:\temp\Apollo_Reports
 $HtmlFile = "$BaseDir\$ReportFilename.html"
 $PdfFile  = "$BaseDir\$ReportFilename.pdf"
-$FinalReportPath = "" # We will track which file opens at the end
+$FinalReportPath = ""
 $ModeLabel = if ($DemoMode) { "(DEMO MODE)" } else { "" }
 
 $HtmlContent = @"
@@ -790,83 +649,44 @@ $HtmlContent = @"
 <html>
 <head>
 <style>
-    body { font-family: 'Segoe UI', sans-serif; color: #333; padding: 20px; }
-    .header { text-align: center; margin-bottom: 20px; }
-    .header img { max-height: 100px; }
-    h1 { color: #0056b3; margin-bottom: 5px; }
-    .meta { font-size: 0.9em; color: #666; text-align: center; margin-bottom: 30px; }
-    .section { background: #f9f9f9; padding: 15px; border-left: 6px solid #0056b3; margin-bottom: 20px; }
-    .item { margin-bottom: 12px; border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; }
-    .item:last-child { border-bottom: none; }
-    .label { font-weight: bold; color: #444; display: block; margin-bottom: 2px; }
-    ul { padding-left: 20px; margin: 0; }
-    .app-list ul { font-size: 0.8em; columns: 2; -webkit-columns: 2; -moz-columns: 2; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; padding: 30px; line-height: 1.4; }
+    .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #0056b3; padding-bottom: 10px; }
+    h1 { color: #0056b3; margin-bottom: 5px; font-size: 24px; }
+    .meta { font-size: 14px; color: #555; display: flex; justify-content: space-between; margin-top: 15px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    th { text-align: left; background: #0056b3; color: white; padding: 10px; }
+    td { padding: 10px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+    .category-row td { background: #f0f4f8; font-weight: bold; font-size: 14px; color: #0056b3; text-transform: uppercase; border-top: 2px solid #d0dce8; }
+    b { color: #222; }
+    .footer { text-align: center; font-size: 11px; color: #888; margin-top: 40px; border-top: 1px solid #ddd; padding-top: 10px; }
 </style>
 </head>
 <body>
 <div class="header">
-    <img src="$LogoUrl" alt="Apollo Technology" onerror="this.style.display='none'">
+    <img src="$LogoUrl" alt="Apollo Technology" style="max-height:80px;" onerror="this.style.display='none'">
     <h1>Health Check Report $ModeLabel</h1>
-    <p>This report has been generated by <strong>$EngineerName</strong> for ticket (<strong>$TicketNumber</strong>) for <strong>$CustomerName</strong></p>
     <div class="meta">
-        <strong>Report Date:</strong> $CurrentDate
+        <div><strong>Ticket:</strong> $TicketNumber<br><strong>Customer:</strong> $CustomerName</div>
+        <div style="text-align: right;"><strong>Date:</strong> $CurrentDate<br><strong>Engineer:</strong> $EngineerName</div>
     </div>
 </div>
 
-<h2>Device Information</h2>
-<div class="section">
-    <div class="item"><span class="label">Device Name/Hostname:</span> $($ComputerInfo.Name)</div>
-    <div class="item"><span class="label">OS Version:</span> $($OSInfo.Caption)</div>
-    <div class="item"><span class="label">OS:</span> $($OSInfo.OSArchitecture) ($($OSInfo.Version))</div>
-    <div class="item"><span class="label">RAM Size:</span> $([math]::Round($ComputerInfo.TotalPhysicalMemory / 1GB, 0)) GB</div>
-    <div class="item"><span class="label">CPU Type/Model:</span> $($CPUInfo.Name)</div>
-    <div class="item"><span class="label">GPU (Graphics):</span> $GPUString</div>
-    <div class="item"><span class="label">Number of Processors:</span> $($CPUInfo.NumberOfLogicalProcessors) Threads / $($CPUInfo.NumberOfCores) Cores</div>
-    <div class="item"><span class="label">Date on Windows Install:</span> $FormattedInstallDate</div>
-    <div class="item">
-        <span class="label">Network Adapters:</span>
-        <ul>$NetworkAdaptersHTML</ul>
-    </div>
-    <div class="item">
-        <span class="label">Disk Drives:</span>
-        <ul>$DriveListHTML</ul>
-    </div>
+<table>
+    <thead><tr><th>Component / Check</th><th>Detailed Specifications & Diagnostics</th><th style='text-align: center;'>Health / Status</th></tr></thead>
+    <tbody>$TableRowsHTML</tbody>
+</table>
+
+<div class="footer">
+    &copy; $CurrentYear by Apollo Technology LTD. Created by Lewis Wiltshire (Apollo Technology).
 </div>
-
-<h2>System Status</h2>
-<div class="section">
-    <div class="item"><span class="label">Internet Connection:</span> $($ReportData.Internet)</div>
-    <div class="item"><span class="label">Battery Status:</span> $($ReportData.Battery)</div>
-    <div class="item"><span class="label">Restore Point:</span> $($ReportData.RestorePoint)</div>
-</div>
-
-$StorageReportHTML
-
-<h2>Maintenance & Updates</h2>
-<div class="section">
-    <div class="item"><span class="label">DISM Health Check:</span> <br>$($ReportData.DismStatus)</div>
-    <div class="item"><span class="label">SFC System Integrity:</span> $($ReportData.SfcStatus)</div>
-    <div class="item"><span class="label">Software Upgrades (Winget):</span> $($ReportData.WingetStatus)</div>
-    <div class="item"><span class="label">Windows Updates:</span> $($ReportData.Updates)</div>
-    <div class="item"><span class="label">Storage Cleanup:</span> $($ReportData.DiskCleanup)</div>
-    <div class="item"><span class="label">Disk Optimization:</span> $($ReportData.Defrag)</div>
-</div>
-
-<h2>Installed Software Inventory</h2>
-<div class="section app-list"><ul>$AppListHTML</ul></div>
-
-$LogSectionHTML
-
-<p style="text-align:center; font-size:0.8em; color:#888; margin-top:50px;">&copy; $CurrentYear by Apollo Technology. All rights reserved | This tool has been created by Lewis Wiltshire (Apollo Technology)</p>
 </body>
 </html>
 "@
 
-# 15. Save HTML
 $HtmlContent | Out-File -FilePath $HtmlFile -Encoding UTF8
 Start-Sleep -Seconds 1
 
-# 16. Convert to PDF using Edge
+# Convert to PDF using Edge
 $EdgeLoc1 = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 $EdgeLoc2 = "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
 $EdgeExe = if (Test-Path $EdgeLoc1) { $EdgeLoc1 } elseif (Test-Path $EdgeLoc2) { $EdgeLoc2 } else { $null }
@@ -876,7 +696,7 @@ if ($EdgeExe) {
     $EdgeUserData = "$BaseDir\EdgeTemp"
     if (-not (Test-Path $EdgeUserData)) { New-Item -Path $EdgeUserData -ItemType Directory -Force | Out-Null }
     try {
-        $Process = Start-Process -FilePath $EdgeExe -ArgumentList "--headless", "--disable-gpu", "--print-to-pdf=`"$PdfFile`"", "--no-pdf-header-footer", "--user-data-dir=`"$EdgeUserData`"", "`"$HtmlFile`"" -PassThru -Wait
+        Start-Process -FilePath $EdgeExe -ArgumentList "--headless", "--disable-gpu", "--print-to-pdf=`"$PdfFile`"", "--no-pdf-header-footer", "--user-data-dir=`"$EdgeUserData`"", "`"$HtmlFile`"" -PassThru -Wait
         Start-Sleep -Seconds 2 
         if (Test-Path $PdfFile) {
             Write-Host "   > Success! Report Generated at $PdfFile" -ForegroundColor Green
@@ -887,26 +707,23 @@ if ($EdgeExe) {
     } catch {
         Write-Warning "PDF Conversion failed. Opening HTML instead."
         $FinalReportPath = $HtmlFile
-        $PdfFile = $null
     }
 } else {
     Write-Warning "Edge not found. Saving HTML report."
     $FinalReportPath = $HtmlFile
-    $PdfFile = $null
 }
 
 # --- 17. EMAIL REPORT ---
 if ($EmailEnabled -and $PdfFile -and (Test-Path $PdfFile)) {
     Write-Host "`nSending Email to $ToAddress..." -ForegroundColor Yellow
     try {
-        Send-MailMessage -From $FromAddress -To $ToAddress -Subject "Health Check Report: $env:COMPUTERNAME" -Body "Report attached." -SmtpServer $SmtpServer -Port $SmtpPort -UseSsl $UseSSL -Credential $EmailCreds -Attachments $PdfFile -ErrorAction Stop
+        Send-MailMessage -From $FromAddress -To $ToAddress -Subject "Health Check Report: $env:COMPUTERNAME ($TicketNumber)" -Body "Report attached for $CustomerName." -SmtpServer $SmtpServer -Port $SmtpPort -UseSsl $UseSSL -Credential $EmailCreds -Attachments $PdfFile -ErrorAction Stop
         Write-Host "   > Email Sent Successfully!" -ForegroundColor Green
     } catch {
         Write-Error "   > Failed to send email. Error: $_"
     }
 }
 
-# --- ALLOW SLEEP AGAIN ---
 try { [SleepUtils]::SetThreadExecutionState(0x80000000) | Out-Null } catch { }
 
 Write-Host "`n------------------------------------------------------------"
